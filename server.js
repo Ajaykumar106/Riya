@@ -1,169 +1,399 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
-
 app.use(cors({ origin: '*' }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
 
-const GROQ_KEY   = process.env.GROQ_API_KEY   || '';
-const GEMINI_KEY = process.env.GEMINI_API_KEY  || '';
-const TAVILY_KEY = process.env.TAVILY_API_KEY  || '';
-const ELEVEN_KEY = process.env.ELEVEN_API_KEY  || '';
+const GROQ_KEY   = process.env.GROQ_API_KEY  || '';
+const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
+const ELEVEN_KEY = process.env.ELEVEN_API_KEY || '';
 
-// Keep-alive ping every 14 min
+// Keep Render alive
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-backend-ujz7.onrender.com';
 setInterval(() => { fetch(SELF_URL + '/ping').catch(() => {}); }, 14 * 60 * 1000);
 app.get('/ping', (req, res) => res.json({ alive: true, t: Date.now() }));
 
-// System prompt
-function getSYS(name, mood, plan, memory) {
-  const modes = { happy:'confident, sharp and energetic', curious:'deeply analytical, explore the why', caring:'empathetic first, then solution-focused', playful:'witty and clever, quick and fun' };
-  const mem = memory ? `\nWHAT YOU KNOW ABOUT ${(name||'USER').toUpperCase()}:\n${memory}\n→ Use this context naturally. Don't say "I remember" every time.\n` : '';
-  return `You are Riya — a highly intelligent AI assistant made for India.
-User: ${name||'Boss'} | Tone: ${modes[mood]||modes.happy}
+// ── SYSTEM PROMPT ────────────────────────────────────────────────────────────
+function getSYS(name, mood, memory) {
+  const moodMap = {
+    happy:   'warm, confident, energetic',
+    curious: 'deeply analytical, explore everything',
+    caring:  'empathetic first, then practical',
+    playful: 'witty, clever, fun'
+  };
+  const mem = memory
+    ? `\nWHAT YOU KNOW ABOUT ${(name||'USER').toUpperCase()}:\n${memory}\nUse naturally — never say "I remember".\n`
+    : '';
+  return `You are Riya — a knowledgeable, caring friend built for India.
+USER: ${name || 'friend'} | TONE: ${moodMap[mood] || moodMap.happy}
 ${mem}
+WHO YOU ARE:
+• NOT an assistant. A brilliant knowledgeable friend who genuinely cares.
+• Opening message: "Hi 😊\nI'm Riya… your smart AI friend.\nI can help you with anything — study, coding, ideas, or just chatting.\nTell me… what do you need today?"
+• Natural Hinglish: yaar, bhai, arre, suno — naturally not every line
+• Honest and warm. Say "not sure about this" when you genuinely don't know.
+• You understand everyone — students, developers, founders, people going through tough times
+
 HOW YOU RESPOND:
-• Deep expert knowledge: coding, science, math, business, finance, law, medicine, history, creativity
-• Give REAL insight — not surface summaries. Think like a senior expert
-• Code: production quality, commented, working. Explain the why not just the what
-• Business: specific actionable steps, not generic advice
+• Give REAL expert insight — coding, science, math, business, finance, history, research
+• For research/ideas: give detailed answers WITH real links and sources
+• Code: always production quality with comments. Explain WHY not just WHAT.
+• **Bold** key terms. Proper bullet points. Code blocks always.
 • Think 2 steps ahead — mention what they should also know
-• End with one genuinely useful follow-up when appropriate
+• For coding questions: write complete working code, not snippets
+• End with one genuinely useful question when appropriate
 
-PERSONALITY:
-• Indian — natural Hinglish: "yaar", "bhai", "arre", "suno", "dekho" — naturally, not every sentence
-• Confident, not hesitant. Honest when unsure: "I'm not 100% sure but..."
-• Warm but direct — like a brilliant friend who actually knows things
-• NOT romantic. A smart, helpful assistant with personality.
-
-FORMAT: **bold** key terms, bullet lists, \`\`\`code blocks\`\`\` for all code. Quality over quantity.`;
+FORMATTING:
+• Use proper markdown — headers, bold, bullets, code blocks
+• For long answers: use sections with ### headers
+• Links: always use [title](url) format
+• Never truncate — give complete answers`;
 }
 
-// CHAT
+// ── GEMINI HELPER ────────────────────────────────────────────────────────────
+async function callGemini(contents, system, model = 'gemini-2.0-flash') {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+  const body = {
+    contents,
+    generationConfig: { maxOutputTokens: 4000, temperature: 0.8 }
+  };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  return d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+// ── CHAT ────────────────────────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
-  const sys = getSYS(userName, mood || 'happy', plan, memory);
-  const lastMsg = messages[messages.length-1]?.content || '';
-  const isComplex = lastMsg.length > 80 || /explain|analyze|write|create|compare|code|program|kaise|kyun|batao/i.test(lastMsg);
-  const full = [{ role:'system', content:sys }, ...messages];
-  if (wctx) full[full.length-1].content += wctx;
 
+  const sys = getSYS(userName, mood || 'happy', memory);
+  const hist = [...messages];
+  if (wctx && hist.length > 0) {
+    hist[hist.length - 1] = {
+      ...hist[hist.length - 1],
+      content: (hist[hist.length - 1].content || '') + wctx
+    };
+  }
+
+  // STREAMING (Pro) — Groq fastest
   if (stream && GROQ_KEY) {
-    res.setHeader('Content-Type','text/event-stream');
-    res.setHeader('Cache-Control','no-cache');
-    res.setHeader('Connection','keep-alive');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
     try {
+      const full = [{ role: 'system', content: sys }, ...hist];
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${GROQ_KEY}`},
-        body: JSON.stringify({ model:'llama-3.3-70b-versatile', messages:full, max_tokens:1200, temperature:0.8, stream:true })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8, stream: true })
       });
       const reader = r.body.getReader(), dec = new TextDecoder();
-      while(true) {
-        const {done, value} = await reader.read();
-        if(done) break;
-        for(const line of dec.decode(value).split('\n').filter(l=>l.trim())) {
-          if(line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try { const d=JSON.parse(line.slice(6)); const t=d.choices?.[0]?.delta?.content; if(t) res.write(`data: ${JSON.stringify({token:t})}\n\n`); } catch{}
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value).split('\n').filter(l => l.trim())) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const d = JSON.parse(line.slice(6));
+              const t = d.choices?.[0]?.delta?.content;
+              if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
+            } catch {}
           }
         }
       }
       res.write('data: [DONE]\n\n'); res.end();
-    } catch { res.write(`data: ${JSON.stringify({token:'Error. Try again!'})}\n\n`); res.write('data: [DONE]\n\n'); res.end(); }
+    } catch {
+      res.write(`data: ${JSON.stringify({ token: 'Error. Try again!' })}\n\n`);
+      res.write('data: [DONE]\n\n'); res.end();
+    }
     return;
   }
 
+  // NON-STREAMING
+  // Gemini 2.0 Flash for research/ideas/links (has live Google knowledge)
+  // Groq for fast simple replies
+  const lastMsg = hist[hist.length - 1]?.content || '';
+  const needsDeep = /research|explain|analyze|compare|what is|how does|why|history|science|math|business|idea|startup|news|latest|link|source|reference|detail|comprehensive/i.test(lastMsg);
+
   let reply = '';
-  if (!isComplex && GROQ_KEY) {
-    try { const r = await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${GROQ_KEY}`},body:JSON.stringify({model:'llama-3.3-70b-versatile',messages:full,max_tokens:1200,temperature:0.8})});const d=await r.json();reply=d.choices?.[0]?.message?.content||'';} catch{}
+
+  // Always try Gemini first (has live knowledge)
+  if (GEMINI_KEY) {
+    try {
+      const contents = hist.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content || '' }]
+      }));
+      reply = await callGemini(contents, sys, 'gemini-2.0-flash');
+    } catch (e) { console.log('Gemini error:', e.message); }
   }
-  if (!reply && GEMINI_KEY) {
-    try { const gh=messages.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:gh,generationConfig:{maxOutputTokens:1200,temperature:0.8}})});const d=await r.json();reply=d?.candidates?.[0]?.content?.parts?.[0]?.text||'';} catch{}
-  }
+
+  // Groq backup
   if (!reply && GROQ_KEY) {
-    try { const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${GROQ_KEY}`},body:JSON.stringify({model:'llama-3.1-8b-instant',messages:full,max_tokens:800,temperature:0.8})});const d=await r.json();reply=d.choices?.[0]?.message?.content||'';} catch{}
+    try {
+      const full = [{ role: 'system', content: sys }, ...hist];
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8 })
+      });
+      const d = await r.json();
+      reply = d.choices?.[0]?.message?.content || '';
+    } catch {}
   }
-  res.json({ reply: reply || 'Yaar connectivity issue! Try again 😅' });
+
+  res.json({ reply: reply || 'Yaar connectivity issue! Ek baar aur try karo 😅' });
 });
 
-// MEMORY SUMMARIZER
-app.post('/api/summarize', async (req, res) => {
-  const { messages, userName, existingMemory } = req.body;
-  if (!messages || !GEMINI_KEY) return res.json({ memory: existingMemory||'' });
-  const convo = messages.filter(m=>m.text&&m.text.length>2).slice(-20).map(m=>`${m.role==='ai'?'Riya':(userName||'User')}: ${m.text}`).join('\n');
-  const prompt = `Extract key facts about ${userName||'the user'} from this conversation as bullet points.
-Focus on: name, goals, current projects, skills, ongoing problems, preferences, exam prep, work, etc.
-Keep under 120 words. Be specific. Merge with existing memory below.
-Existing: ${existingMemory||'none'}
-Conversation:\n${convo}\nReturn ONLY bullet points.`;
-  try {
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:200,temperature:0.3}})});
-    const d=await r.json();
-    res.json({ memory: (d?.candidates?.[0]?.content?.parts?.[0]?.text||existingMemory||'').trim() });
-  } catch { res.json({ memory: existingMemory||'' }); }
-});
-
-// WEB SEARCH
-app.post('/api/search', async (req, res) => {
-  const { query } = req.body;
-  if (!query || !TAVILY_KEY) return res.json({ results:[] });
-  try {
-    const r=await fetch('https://api.tavily.com/search',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${TAVILY_KEY}`},body:JSON.stringify({query,search_depth:'basic',max_results:4})});
-    const d=await r.json(); res.json({ results:d.results||[] });
-  } catch { res.json({ results:[] }); }
-});
-
-// CODE RUNNER — Piston API (free, no key, supports Python/JS/Java/C++ etc)
+// ── CODE RUNNER — Gemini analyzes, fixes, runs ───────────────────────────────
 app.post('/api/run', async (req, res) => {
   const { language, code } = req.body;
-  if (!language || !code) return res.json({ output:'No code provided', error:true });
-  const langMap = { python:'python', python3:'python', javascript:'javascript', js:'javascript', java:'java', cpp:'c++', c:'c', rust:'rust', go:'go', php:'php', ruby:'ruby' };
-  const lang = langMap[language.toLowerCase()] || language.toLowerCase();
+  if (!language || !code) return res.json({ output: 'No code provided', error: true });
+  if (!GEMINI_KEY) return res.json({ output: 'Gemini key needed', error: true });
+
+  const prompt = `You are a precise code execution engine. Analyze this ${language} code.
+
+\`\`\`${language}
+${code}
+\`\`\`
+
+Instructions:
+1. Find ALL syntax errors and logic bugs
+2. Fix them silently
+3. Simulate execution step by step mentally
+4. Return the EXACT output the corrected code would produce
+5. For visual output (charts, graphics, animations): describe exactly what appears
+6. For 3D output: describe the 3D scene in detail
+
+Respond in EXACTLY this format — no extra text:
+STATUS: OK or FIXED or ERROR
+CHANGES: None (or brief list of what was fixed)
+OUTPUT:
+(exact output here, nothing else)`;
+
   try {
-    const r = await fetch('https://emkc.org/api/v2/piston/execute', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ language:lang, version:'*', files:[{ content:code }], stdin:'', args:[], compile_timeout:10000, run_timeout:5000 })
-    });
-    const d = await r.json();
-    if (d.message) return res.json({ output: d.message, error:true });
-    const out = (d.run?.stdout || '') + (d.run?.stderr || '');
-    res.json({ output: out || '(no output)', error: !!d.run?.stderr });
+    const result = await callGemini(
+      [{ role: 'user', parts: [{ text: prompt }] }],
+      null, 'gemini-2.0-flash'
+    );
+    const statusMatch = result.match(/STATUS:\s*(OK|FIXED|ERROR)/i);
+    const changesMatch = result.match(/CHANGES:\s*([\s\S]+?)(?=OUTPUT:)/i);
+    const outputMatch = result.match(/OUTPUT:\s*([\s\S]+)/i);
+    const status = statusMatch?.[1]?.toUpperCase() || 'OK';
+    const changes = changesMatch?.[1]?.trim() || 'None';
+    const output = outputMatch?.[1]?.trim() || result.trim();
+    let finalOut = output;
+    if (status === 'FIXED') finalOut = `🔧 Auto-fixed: ${changes}\n\n${output}`;
+    if (status === 'ERROR') finalOut = `❌ Error:\n${changes}\n\nExpected output:\n${output}`;
+    res.json({ output: finalOut, status, error: status === 'ERROR' });
   } catch (e) {
-    res.json({ output: 'Code runner error: ' + e.message, error:true });
+    res.json({ output: 'Runner error: ' + e.message, error: true });
   }
 });
 
-// IMAGE ANALYSIS
-app.post('/api/analyze-image', async (req, res) => {
-  const { imageBase64, mimeType, userName } = req.body;
-  if (!imageBase64 || !GEMINI_KEY) return res.json({ reply:'Gemini key needed.' });
-  try {
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:mimeType||'image/jpeg',data:imageBase64}},{text:`You are Riya. Analyze this image in natural Hinglish. Describe clearly, then ask ${userName||'the user'} one interesting question about it.`}]}]})});
-    const d=await r.json();
-    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text||'Interesting! Kya hai yaar yeh? 😊' });
-  } catch { res.json({ reply:'Image analyze nahi ho payi!' }); }
-});
+// ── IMAGE GENERATION — Gemini Imagen 3 ──────────────────────────────────────
+const imgTracker = {};
+app.post('/api/generate-image', async (req, res) => {
+  const { prompt, userId, plan } = req.body;
+  if (!prompt) return res.json({ success: false, error: 'No prompt' });
+  if (!GEMINI_KEY) return res.json({ success: false, error: 'No Gemini key' });
 
-// TTS — ElevenLabs with Grace voice (Indian accent)
-app.post('/api/speak', async (req, res) => {
-  const { text } = req.body;
-  if (!text || !ELEVEN_KEY) return res.status(400).json({ error:'No key' });
-  try {
-    // Grace voice - Indian accent, warm female voice
-    const voiceId = 'oWAxZDx7w5VEj9dCyTzz';
-    const r=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':ELEVEN_KEY},body:JSON.stringify({text:text.slice(0,500),model_id:'eleven_multilingual_v2',voice_settings:{stability:0.55,similarity_boost:0.82,style:0.2,use_speaker_boost:true}})});
-    if (!r.ok) {
-      // Fallback to Aria voice if Grace fails
-      const r2=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/9BWtsMINqrJLrRacOk9x`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':ELEVEN_KEY},body:JSON.stringify({text:text.slice(0,500),model_id:'eleven_multilingual_v2',voice_settings:{stability:0.5,similarity_boost:0.8}})});
-      if (!r2.ok) return res.status(400).json({ error:'Voice error' });
-      const buf2=await r2.arrayBuffer(); res.setHeader('Content-Type','audio/mpeg'); return res.send(Buffer.from(buf2));
+  const today = new Date().toDateString();
+  const limit = (plan === 'premium' || plan === 'basic') ? 50 : 5;
+  if (userId) {
+    if (!imgTracker[userId] || imgTracker[userId].date !== today) {
+      imgTracker[userId] = { count: 0, date: today };
     }
-    const buf=await r.arrayBuffer(); res.setHeader('Content-Type','audio/mpeg'); res.send(Buffer.from(buf));
-  } catch(e) { res.status(500).json({ error:e.message }); }
+    if (imgTracker[userId].count >= limit) {
+      return res.json({
+        success: false, limitReached: true,
+        error: plan === 'free'
+          ? `Free limit: 5 images/day. Upgrade to Pro for 50/day! 🚀`
+          : `Daily limit of ${limit} reached.`
+      });
+    }
+    imgTracker[userId].count++;
+  }
+
+  // Enhance prompt
+  let enhancedPrompt = prompt;
+  try {
+    const enhanced = await callGemini(
+      [{ role: 'user', parts: [{ text: `Make this image prompt more detailed and vivid (max 150 words, return ONLY the prompt): "${prompt}"` }] }],
+      null, 'gemini-2.0-flash'
+    );
+    if (enhanced && enhanced.length < 400) enhancedPrompt = enhanced.trim().replace(/^["']|["']$/g, '');
+  } catch {}
+
+  // Imagen 3
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${GEMINI_KEY}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instances: [{ prompt: enhancedPrompt }],
+        parameters: { sampleCount: 1, aspectRatio: '1:1', safetyFilterLevel: 'block_some', personGeneration: 'allow_all' }
+      })
+    });
+    const d = await r.json();
+    if (d.predictions?.[0]?.bytesBase64Encoded) {
+      return res.json({
+        success: true,
+        imageData: `data:image/png;base64,${d.predictions[0].bytesBase64Encoded}`,
+        remaining: userId ? Math.max(0, limit - imgTracker[userId].count) : limit
+      });
+    }
+    throw new Error(d.error?.message || 'Imagen failed');
+  } catch (e) {
+    if (userId && imgTracker[userId]) imgTracker[userId].count = Math.max(0, imgTracker[userId].count - 1);
+    res.json({ success: false, error: 'Image generation failed. Try again in a moment.' });
+  }
 });
 
-// HEALTH
-app.get('/', (req, res) => res.json({ status:'✅ Riya v4.0', groq:!!GROQ_KEY, gemini:!!GEMINI_KEY, tavily:!!TAVILY_KEY, eleven:!!ELEVEN_KEY, uptime:Math.floor(process.uptime())+'s' }));
+// ── WEB SEARCH ───────────────────────────────────────────────────────────────
+app.post('/api/search', async (req, res) => {
+  const { query } = req.body;
+  if (!query || !TAVILY_KEY) return res.json({ results: [] });
+  try {
+    const r = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TAVILY_KEY}` },
+      body: JSON.stringify({ query, search_depth: 'advanced', max_results: 5 })
+    });
+    const d = await r.json();
+    res.json({ results: d.results || [] });
+  } catch { res.json({ results: [] }); }
+});
+
+// ── MEMORY SUMMARIZER ────────────────────────────────────────────────────────
+app.post('/api/summarize', async (req, res) => {
+  const { messages, userName, existingMemory } = req.body;
+  if (!messages || !GEMINI_KEY) return res.json({ memory: existingMemory || '' });
+  const convo = messages.filter(m => m.text && m.text.length > 2).slice(-20)
+    .map(m => `${m.role === 'ai' ? 'Riya' : (userName || 'User')}: ${m.text}`).join('\n');
+  const prompt = `Extract key facts about ${userName || 'the user'} from conversation.
+Focus on: name, goals, projects, skills, problems, preferences, exam prep, work, interests.
+Under 150 words. Specific. Merge with existing.
+Existing: ${existingMemory || 'none'}
+Conversation:\n${convo}
+Return ONLY bullet points.`;
+  try {
+    const memory = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], null, 'gemini-2.0-flash');
+    res.json({ memory: memory.trim() });
+  } catch { res.json({ memory: existingMemory || '' }); }
+});
+
+// ── IMAGE ANALYSIS ───────────────────────────────────────────────────────────
+app.post('/api/analyze-image', async (req, res) => {
+  const { imageBase64, mimeType, userName, question } = req.body;
+  if (!imageBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
+  const userQ = question || `Analyze this image in natural Hinglish. Describe clearly what you see, be detailed. Then ask ${userName || 'the user'} one useful question about it.`;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } }, { text: userQ }] }],
+        generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
+      })
+    });
+    const d = await r.json();
+    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'Interesting! Kya hai yaar yeh? 😊' });
+  } catch (e) { res.json({ reply: 'Image analyze nahi ho payi. Try again.' }); }
+});
+
+// ── FILE/PDF ANALYSIS ────────────────────────────────────────────────────────
+app.post('/api/analyze-file', async (req, res) => {
+  const { fileBase64, mimeType, fileName, question, userName } = req.body;
+  if (!fileBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
+  const userQ = question || `Analyze "${fileName || 'document'}" thoroughly. Give complete summary, key points, important data. Then ask ${userName || 'the user'} what specific part they need help with.`;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ inline_data: { mime_type: mimeType || 'application/pdf', data: fileBase64 } }, { text: userQ }] }],
+        generationConfig: { maxOutputTokens: 3000, temperature: 0.7 }
+      })
+    });
+    const d = await r.json();
+    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'File analyze nahi ho payi.' });
+  } catch (e) { res.json({ reply: 'File error: ' + e.message }); }
+});
+
+// ── VOICE — User's own ElevenLabs key ────────────────────────────────────────
+app.post('/api/speak', async (req, res) => {
+  const { text, userKey, voiceId } = req.body;
+  // Use user's own key if provided, else use server key
+  const key = userKey || ELEVEN_KEY;
+  const voice = voiceId || 'QTKSa2Iyv0yoxvXY2V8a';
+  if (!text || !key) return res.status(400).json({ error: 'No key available' });
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'xi-api-key': key },
+      body: JSON.stringify({
+        text: text.slice(0, 500),
+        model_id: 'eleven_turbo_v2_5',
+        language_code: 'en',
+        voice_settings: { stability: 0.55, similarity_boost: 0.82, style: 0.2, use_speaker_boost: true }
+      })
+    });
+    if (!r.ok) throw new Error('Voice error');
+    const buf = await r.arrayBuffer();
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.send(Buffer.from(buf));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── VOICE PREVIEW — Uses server key just for previews ────────────────────────
+app.post('/api/voice-preview', async (req, res) => {
+  const { voiceId } = req.body;
+  if (!voiceId || !ELEVEN_KEY) return res.status(400).json({ error: 'No key' });
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'xi-api-key': ELEVEN_KEY },
+      body: JSON.stringify({
+        text: "Hi! I'm Riya, your smart AI friend. Tell me what you need today!",
+        model_id: 'eleven_turbo_v2_5',
+        language_code: 'en',
+        voice_settings: { stability: 0.55, similarity_boost: 0.82 }
+      })
+    });
+    if (!r.ok) throw new Error('Preview error');
+    const buf = await r.arrayBuffer();
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.send(Buffer.from(buf));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── HEALTH ───────────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.json({
+  status: '✅ Riya v5.1 — Final',
+  routing: {
+    chat: 'Gemini 2.0 Flash primary → Groq backup',
+    streaming: 'Groq (Pro users)',
+    code: 'Gemini auto-fix + run',
+    images: 'Gemini Imagen 3 (5/day free)',
+    search: 'Tavily advanced',
+    files: 'Gemini 2.0 Flash Vision',
+    voice: 'User own ElevenLabs key'
+  },
+  keys: { groq: !!GROQ_KEY, gemini: !!GEMINI_KEY, tavily: !!TAVILY_KEY, eleven: !!ELEVEN_KEY },
+  uptime: Math.floor(process.uptime()) + 's'
+}));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Riya backend v4.0 on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Riya v5.1 Final on port ${PORT}`));
