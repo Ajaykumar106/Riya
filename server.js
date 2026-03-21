@@ -290,18 +290,67 @@ app.post('/api/search', async (req, res) => {
 app.post('/api/summarize', async (req, res) => {
   const { messages, userName, existingMemory } = req.body;
   if (!messages || !GEMINI_KEY) return res.json({ memory: existingMemory || '' });
-  const convo = messages.filter(m => m.text && m.text.length > 2).slice(-20)
-    .map(m => `${m.role === 'ai' ? 'Riya' : (userName || 'User')}: ${m.text}`).join('\n');
-  const prompt = `Extract key facts about ${userName || 'the user'} from conversation.
-Focus on: name, goals, projects, skills, problems, preferences, exam prep, work, interests.
-Under 150 words. Specific. Merge with existing.
-Existing: ${existingMemory || 'none'}
-Conversation:\n${convo}
-Return ONLY bullet points.`;
+
+  const convo = messages
+    .filter(m => m.text && m.text.length > 2)
+    .slice(-30)
+    .map(m => `${m.role === 'ai' ? 'Riya' : (userName || 'User')}: ${m.text}`)
+    .join('\n');
+
+  const prompt = `You are a deep memory extractor for Riya - an AI friend.
+Extract and UPDATE the memory about ${userName || 'the user'} from this conversation.
+
+EXISTING MEMORY:
+${existingMemory || 'None yet'}
+
+NEW CONVERSATION:
+${convo}
+
+Extract EVERYTHING important - merge with existing, update if changed, add new facts.
+Focus on these categories:
+
+PERSONAL: name, age, city, college, gender, birthday
+LIFE: goals, dreams, struggles, fears, what makes them happy/sad
+WORK/STUDY: current projects, subjects, exams upcoming, job, skills learning
+PEOPLE: friends, family members mentioned, relationships
+INTERESTS: hobbies, favorite things, music, games, food
+EMOTIONAL: what they said when feeling low, their wins, proud moments
+RIYA CONTEXT: topics they always ask about, how they like responses
+
+Rules:
+- Keep facts SHORT and SPECIFIC
+- Remove outdated info if updated
+- Max 300 words total
+- Format as clean bullet points by category
+- Write in 3rd person: "User is..." not "I am..."
+- Never include sensitive data like passwords
+
+Return ONLY the updated memory bullet points, nothing else.`;
+
   try {
-    const memory = await callGemini([{ role: 'user', parts: [{ text: prompt }] }], null, 'gemini-2.0-flash');
+    const memory = await callGemini(
+      [{ role: 'user', parts: [{ text: prompt }] }],
+      null,
+      'gemini-2.0-flash'
+    );
     res.json({ memory: memory.trim() });
-  } catch { res.json({ memory: existingMemory || '' }); }
+  } catch(e) {
+    console.log('Memory error:', e.message);
+    res.json({ memory: existingMemory || '' });
+  }
+});
+
+// Memory save endpoint - save specific fact
+app.post('/api/memory/save', async (req, res) => {
+  const { userId, fact, existingMemory } = req.body;
+  if (!fact || !GEMINI_KEY) return res.json({ success: false });
+  const newMemory = (existingMemory || '') + '\n- ' + fact;
+  res.json({ success: true, memory: newMemory.trim() });
+});
+
+// Memory delete endpoint
+app.post('/api/memory/clear', async (req, res) => {
+  res.json({ success: true, memory: '' });
 });
 
 // ── IMAGE ANALYSIS ───────────────────────────────────────────────────────────
