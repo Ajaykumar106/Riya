@@ -154,11 +154,7 @@ app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory, city } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
 
-  // Auto detect emotion from last message
-  const lastMsg = (hist[hist.length-1]?.content || '');
-  const autoEmotion = detectEmotion(lastMsg);
-  const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
-  const sys = getSYS(userName, finalMood, memory, city || 'India');
+  // Build history first
   const hist = [...messages];
   if (wctx && hist.length > 0) {
     hist[hist.length - 1] = {
@@ -166,6 +162,12 @@ app.post('/api/chat', async (req, res) => {
       content: (hist[hist.length - 1].content || '') + wctx
     };
   }
+
+  // Auto detect emotion from last message
+  const lastMsg = (hist[hist.length - 1]?.content || '');
+  const autoEmotion = detectEmotion(lastMsg);
+  const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
+  const sys = getSYS(userName, finalMood, memory, city || 'India');
 
   // STREAMING (Pro) — Groq fastest
   if (stream && GROQ_KEY) {
