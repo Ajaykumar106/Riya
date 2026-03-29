@@ -11,8 +11,9 @@ const ELEVEN_KEY = process.env.ELEVEN_API_KEY || '';
 
 // Keep Render alive
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-backend-ujz7.onrender.com';
-setInterval(() => { fetch(SELF_URL + '/ping').catch(() => {}); }, 14 * 60 * 1000);
+setInterval(() => { fetch(SELF_URL + '/ping').catch(() => {}); }, 5 * 60 * 1000);
 app.get('/ping', (req, res) => res.json({ alive: true, t: Date.now() }));
+app.get('/warmup', (req, res) => res.json({ ready: true, msg: 'Riya is awake! 🌸' }));
 
 // ── SYSTEM PROMPT ────────────────────────────────────────────────────────────
 // ================================================================
@@ -153,6 +154,8 @@ async function callGemini(contents, system, model = 'gemini-2.0-flash') {
 app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory, city } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
+  // Set timeout so frontend doesn't wait forever
+  req.setTimeout(25000);
 
   // Build history first
   const hist = [...messages];
@@ -236,7 +239,7 @@ app.post('/api/chat', async (req, res) => {
     } catch {}
   }
 
-  res.json({ reply: reply || 'Yaar connectivity issue! Ek baar aur try karo 😅' });
+  res.json({ reply: reply || 'Yaar net ya server mein thodi problem hai, ek second baad try karo! 🙏' });
 });
 
 // ── CODE RUNNER — Gemini analyzes, fixes, runs ───────────────────────────────
@@ -473,7 +476,8 @@ app.post('/api/speak', async (req, res) => {
   // Use user's own key if provided, else use server key
   const key = userKey || ELEVEN_KEY;
   const voice = voiceId || 'QTKSa2Iyv0yoxvXY2V8a';
-  if (!text || !key) return res.status(400).json({ error: 'No key available' });
+  if (!text) return res.status(400).json({ error: 'No text provided' });
+  if (!key) return res.status(200).json({ error: 'no_key', msg: 'ElevenLabs key nahi hai. Settings mein apni key add karo.' });
   try {
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
       method: 'POST',
@@ -527,6 +531,7 @@ app.get('/', (req, res) => res.json({
     voice: 'User own ElevenLabs key'
   },
   keys: { groq: !!GROQ_KEY, gemini: !!GEMINI_KEY, tavily: !!TAVILY_KEY, eleven: !!ELEVEN_KEY },
+  note: !ELEVEN_KEY ? '⚠️ ElevenLabs key missing — add ELEVEN_API_KEY in Render env vars' : '✅ All keys loaded',
   uptime: Math.floor(process.uptime()) + 's'
 }));
 
