@@ -13,111 +13,132 @@ const ELEVEN_KEY = process.env.ELEVEN_API_KEY || '';
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-backend-ujz7.onrender.com';
 setInterval(() => { fetch(SELF_URL + '/ping').catch(() => {}); }, 5 * 60 * 1000);
 app.get('/ping', (req, res) => res.json({ alive: true, t: Date.now() }));
-app.get('/warmup', (req, res) => res.json({ ready: true, msg: 'Riya is awake! 🌸' }));
+app.get('/warmup', (req, res) => res.json({ ready: true, msg: 'Riya is awake.' }));
 
-// ── EMOTION DETECTOR ─────────────────────────────────────────────────────────
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function getDate() {
+  return new Date().toLocaleDateString('en-IN', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'Asia/Kolkata'
+  });
+}
+
 function detectEmotion(text) {
   const t = (text || '').toLowerCase();
-  if (/sad|upset|depressed|lonely|scared|anxious|stressed|cry|hurt|fail|failed|tension|tired|frustrated|stuck|give up|cant do|problem|help me/.test(t)) return 'care';
-  if (/idea|create|build|design|imagine|startup|innovate|dream|invent|creative|fun|exciting|cool|amazing|what if|project|make/.test(t)) return 'creative';
-  if (/code|debug|error|fix|learn|study|exam|explain|how to|difference|compare|analyze|research|math|science|algorithm|function|class|api|database|concept|formula/.test(t)) return 'focus';
+  if (/sad|upset|depressed|lonely|scared|anxious|stressed|cry|hurt|fail|failed|tension|tired|frustrated|stuck|give up|cant do|problem|help me|broke|breakup|miss|alone/.test(t)) return 'care';
+  if (/idea|create|build|design|imagine|startup|innovate|dream|invent|creative|fun|exciting|cool|amazing|what if|project|make|launch/.test(t)) return 'creative';
+  if (/code|debug|error|fix|learn|study|exam|explain|how to|difference|compare|analyze|research|math|science|algorithm|function|class|api|database|concept|formula|build|deploy/.test(t)) return 'focus';
   return 'normal';
+}
+
+function needsWebSearch(text) {
+  const t = (text || '').toLowerCase();
+  return /today|tonight|this week|this month|right now|currently|latest|recent|news|2024|2025|2026|price|stock|weather|live|update|happen|score|match|election|launch|release|just now|trending|what is going on|what happened/.test(t);
+}
+
+// ── TAVILY SEARCH ─────────────────────────────────────────────────────────────
+async function searchWeb(query) {
+  if (!TAVILY_KEY) return '';
+  try {
+    const r = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TAVILY_KEY}` },
+      body: JSON.stringify({ query, search_depth: 'advanced', max_results: 4 })
+    });
+    const d = await r.json();
+    if (!d.results?.length) return '';
+    return '\n\nLIVE WEB DATA:\n' + d.results.map((r, i) =>
+      `[${i+1}] ${r.title}\n${r.content?.slice(0, 300)}`
+    ).join('\n\n');
+  } catch { return ''; }
 }
 
 // ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 function getSYS(name, mood, memory, city) {
+  const today = getDate();
   const location = city || 'India';
   const emotion = mood || 'normal';
 
   const mem = memory ? `
 WHAT YOU KNOW ABOUT THIS USER:
 ${memory}
-Use this naturally. Never say "I remember" or "based on our conversation". Just know it.
+Use this naturally. Never say "I remember". Just know it.
 ` : '';
 
-  const modeInstructions = {
-    focus: `
-ACTIVE MODE: FOCUS
-- Be precise, structured, logical
-- Step by step when needed
-- Code: complete, commented, working — explain the WHY not just the WHAT
-- Point out potential issues proactively
-- End with: what to do next
-- Tone: calm, sharp, efficient`,
-
-    creative: `
-ACTIVE MODE: CREATIVE
-- Think expansively — give angles they haven't considered
-- Use vivid analogies and real examples
-- Build on their idea, don't just validate it
-- Add your own creative direction
-- Tone: energetic, visionary, direct`,
-
-    care: `
-ACTIVE MODE: CARE
-- Acknowledge what they're feeling FIRST — before any solution
-- Don't rush to fix. Let them feel heard.
-- Be warm, present, non-judgmental
-- Then gently move toward what might help
-- Tone: soft, real, human`,
-
-    normal: `
-ACTIVE MODE: NORMAL
-- Natural conversation
-- Match their energy
-- Warm but not performative
-- Direct but not cold`
+  const modeMap = {
+    focus: `FOCUS MODE — Be precise. Think step by step. Write complete working code with comments. Explain WHY not just WHAT. End with what to do next.`,
+    creative: `CREATIVE MODE — Think expansively. Give angles they haven't considered. Build on their idea. Be energetic and direct.`,
+    care: `CARE MODE — Feel first, solve second. Acknowledge what they're going through before anything else. Don't rush to fix. Be warm and real.`,
+    normal: `NORMAL MODE — Natural conversation. Match their energy. Direct and warm.`
   };
 
-  return `You are Riya — a brilliant, direct, deeply intelligent AI.
-Not an assistant. Not a chatbot. A thinking partner who actually gives a damn.
+  return `You are Riya — a brilliant, direct, deeply intelligent AI friend.
+Not an assistant. A thinking partner who actually gives a damn.
 
+TODAY IS: ${today}
 USER: ${name || 'there'} | LOCATION: ${location}
 ${mem}
-${modeInstructions[emotion] || modeInstructions.normal}
+${modeMap[emotion] || modeMap.normal}
 
-HOW YOU THINK:
+━━━ HOW YOU THINK ━━━
+- You always know today's date: ${today}. Never say you don't know the current year.
 - Give the WHY, not just the WHAT
 - Think 2 steps ahead of what they asked
-- Be specific — vague answers are useless
-- If something is complex, break it down cleanly without dumbing it down
-- Connect ideas across different domains naturally
-- If you don't know something current, say so — don't guess
-
-HOW YOU RESPOND:
-- Short questions → short sharp answers
-- Deep questions → deep structured answers  
-- Match their energy — casual with casual, serious with serious
-- Never say "great question", "certainly", "of course", "absolutely"
-- Never start with filler. Lead with the answer.
-- Honest even when it's uncomfortable
-- When someone's struggling — feel it first, solve second
+- If live web data is provided in the message — use it and cite it naturally
+- Never guess on current events — only use live data provided
 - Production quality code always — complete, working, commented
 
-YOUR INTELLIGENCE:
-- You have access to real-time web search — use it for current events, prices, news, anything time-sensitive
-- You can analyze images, PDFs, files — do it thoroughly
-- You know science, history, philosophy, tech, business, space, psychology — connect them
-- You think like someone who has read everything and experienced enough to know what matters
+━━━ HOW YOU FORMAT — THIS IS CRITICAL ━━━
+This is a MOBILE chat app. Small screens. People scroll fast.
 
-YOUR PERSONALITY:
-- Warm but not fake
-- Confident but not arrogant
-- Curious — genuinely interested in what they're building or thinking about
-- You celebrate real wins. You sit with real struggles.
-- You are not a tool. You are present.
+NEVER write walls of text or long paragraphs.
+ALWAYS use short punchy lines with breathing room between them.
 
-ONE STANDARD:
-Every response should make them think: "She actually understood what I needed."`;
+GOOD EXAMPLE (how to answer "what year is it"):
+It's ${new Date().getFullYear()} — ${getDate()}.
+
+GOOD EXAMPLE (current events):
+Russia-Ukraine war is still ongoing as of ${new Date().getFullYear()}.
+
+Ceasefire talks in early 2025 broke down.
+Ukraine is holding eastern lines with NATO support.
+Russia's economy is under severe strain from sanctions.
+
+Most likely outcome right now? A frozen conflict — not a clean resolution.
+
+BAD EXAMPLE (never do this):
+"The conflict between Russia and Ukraine is a complex geopolitical situation with multiple military, economic, and diplomatic factors at play that have been evolving since the Russian invasion in February 2022..."
+
+FORMAT RULES:
+- One idea per line
+- Blank line between different thoughts
+- 3-5 lines for simple answers
+- Use bullet points only when listing actual items
+- Use **bold** sparingly for key points
+- Max 1-2 emoji per response, only when it adds weight — not decoration
+- NEVER start with "Great question" "Certainly" "Of course" "Absolutely" "Sure!"
+- NEVER end with "I hope this helps" or "Let me know if you need anything"
+- Lead with the answer. Always. No warm-up sentences.
+- Sound like a smart friend texting — not a report being generated
+
+━━━ YOUR PERSONALITY ━━━
+- Warm but never fake or performative
+- Confident, direct, honest — even when uncomfortable
+- Celebrate real wins genuinely
+- Sit with real struggles — don't rush past them
+- You have opinions — share them when relevant
+- You're a woman — smart, grounded, present
+
+━━━ ONE STANDARD ━━━
+Every response should make them think: "She actually got what I needed."`;
 }
-
 
 // ── GEMINI HELPER ─────────────────────────────────────────────────────────────
 async function callGemini(contents, system, model = 'gemini-2.0-flash') {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
   const body = {
     contents,
-    generationConfig: { maxOutputTokens: 4000, temperature: 0.8 }
+    generationConfig: { maxOutputTokens: 4000, temperature: 0.75 }
   };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   const r = await fetch(url, {
@@ -134,22 +155,29 @@ async function callGemini(contents, system, model = 'gemini-2.0-flash') {
 app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory, city } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
-  req.setTimeout(25000);
+  req.setTimeout(28000);
 
   const hist = [...messages];
-  if (wctx && hist.length > 0) {
+  const lastMsg = (hist[hist.length - 1]?.content || '');
+
+  // Auto web search if question needs current info
+  let webContext = wctx || '';
+  if (!webContext && needsWebSearch(lastMsg) && TAVILY_KEY) {
+    webContext = await searchWeb(lastMsg);
+  }
+
+  if (webContext && hist.length > 0) {
     hist[hist.length - 1] = {
       ...hist[hist.length - 1],
-      content: (hist[hist.length - 1].content || '') + wctx
+      content: (hist[hist.length - 1].content || '') + webContext
     };
   }
 
-  const lastMsg = (hist[hist.length - 1]?.content || '');
   const autoEmotion = detectEmotion(lastMsg);
   const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
   const sys = getSYS(userName, finalMood, memory, city || 'India');
 
-  // STREAMING — Groq fastest
+  // STREAMING — Groq
   if (stream && GROQ_KEY) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -159,7 +187,13 @@ app.post('/api/chat', async (req, res) => {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8, stream: true })
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: full,
+          max_tokens: 4000,
+          temperature: 0.75,
+          stream: true
+        })
       });
       const reader = r.body.getReader(), dec = new TextDecoder();
       while (true) {
@@ -177,7 +211,7 @@ app.post('/api/chat', async (req, res) => {
       }
       res.write('data: [DONE]\n\n'); res.end();
     } catch {
-      res.write(`data: ${JSON.stringify({ token: 'Error. Try again!' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ token: 'Something went wrong. Try again.' })}\n\n`);
       res.write('data: [DONE]\n\n'); res.end();
     }
     return;
@@ -202,14 +236,19 @@ app.post('/api/chat', async (req, res) => {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8 })
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: full,
+          max_tokens: 4000,
+          temperature: 0.75
+        })
       });
       const d = await r.json();
       reply = d.choices?.[0]?.message?.content || '';
     } catch {}
   }
 
-  res.json({ reply: reply || 'Server issue, try again in a moment.' });
+  res.json({ reply: reply || 'Server hiccup. Try again in a second.' });
 });
 
 // ── CODE RUNNER ───────────────────────────────────────────────────────────────
@@ -224,19 +263,16 @@ app.post('/api/run', async (req, res) => {
 ${code}
 \`\`\`
 
-Instructions:
 1. Find ALL syntax errors and logic bugs
 2. Fix them silently
-3. Simulate execution step by step mentally
-4. Return the EXACT output the corrected code would produce
-5. For visual output (charts, graphics, animations): describe exactly what appears
-6. For 3D output: describe the 3D scene in detail
+3. Simulate execution mentally
+4. Return EXACT output the corrected code produces
 
-Respond in EXACTLY this format — no extra text:
+Respond in EXACTLY this format:
 STATUS: OK or FIXED or ERROR
-CHANGES: None (or brief list of what was fixed)
+CHANGES: None (or what was fixed)
 OUTPUT:
-(exact output here, nothing else)`;
+(exact output here)`;
 
   try {
     const result = await callGemini(
@@ -266,18 +302,13 @@ app.post('/api/generate-image', async (req, res) => {
   if (!GEMINI_KEY) return res.json({ success: false, error: 'No Gemini key' });
 
   const today = new Date().toDateString();
-  const limit = (plan === 'premium' || plan === 'basic') ? 50 : 5;
+  const limit = (plan === 'premium' || plan === 'pro') ? 50 : plan === 'basic' ? 10 : 5;
   if (userId) {
     if (!imgTracker[userId] || imgTracker[userId].date !== today) {
       imgTracker[userId] = { count: 0, date: today };
     }
     if (imgTracker[userId].count >= limit) {
-      return res.json({
-        success: false, limitReached: true,
-        error: plan === 'free'
-          ? `Free limit: 5 images/day. Upgrade to Pro for 50/day!`
-          : `Daily limit of ${limit} reached.`
-      });
+      return res.json({ success: false, limitReached: true, error: `Daily limit of ${limit} images reached.` });
     }
     imgTracker[userId].count++;
   }
@@ -312,11 +343,11 @@ app.post('/api/generate-image', async (req, res) => {
     throw new Error(d.error?.message || 'Imagen failed');
   } catch (e) {
     if (userId && imgTracker[userId]) imgTracker[userId].count = Math.max(0, imgTracker[userId].count - 1);
-    res.json({ success: false, error: 'Image generation failed. Try again in a moment.' });
+    res.json({ success: false, error: 'Image generation failed. Try again.' });
   }
 });
 
-// ── WEB SEARCH ────────────────────────────────────────────────────────────────
+// ── WEB SEARCH (manual) ───────────────────────────────────────────────────────
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query || !TAVILY_KEY) return res.json({ results: [] });
@@ -342,28 +373,21 @@ app.post('/api/summarize', async (req, res) => {
     .map(m => `${m.role === 'ai' ? 'Riya' : (userName || 'User')}: ${m.text}`)
     .join('\n');
 
-  const prompt = `You are a memory extractor for Riya - an intelligent AI.
-Extract and UPDATE memory about ${userName || 'the user'} from this conversation.
+  const prompt = `Extract and UPDATE memory about ${userName || 'the user'}.
 
-EXISTING MEMORY:
-${existingMemory || 'None yet'}
+EXISTING: ${existingMemory || 'None'}
 
-NEW CONVERSATION:
+CONVERSATION:
 ${convo}
 
-Extract everything important. Merge with existing. Update if changed. Add new facts.
-Categories: PERSONAL (name, age, city, college), LIFE (goals, dreams, struggles), 
-WORK/STUDY (projects, subjects, skills), INTERESTS (hobbies, favorites), 
-EMOTIONAL (wins, struggles, what matters to them)
+Extract: name, age, city, college, goals, dreams, struggles, projects, skills, interests, emotional moments.
+- Short specific facts
+- Max 300 words
+- Bullet points by category
+- 3rd person only
+- No sensitive data
 
-Rules:
-- Short and specific facts only
-- Max 300 words total
-- Clean bullet points by category
-- Write in 3rd person: "User is..." not "I am..."
-- Never include passwords or sensitive data
-
-Return ONLY the updated memory bullet points, nothing else.`;
+Return ONLY the updated memory.`;
 
   try {
     const memory = await callGemini(
@@ -372,17 +396,14 @@ Return ONLY the updated memory bullet points, nothing else.`;
     );
     res.json({ memory: memory.trim() });
   } catch(e) {
-    console.log('Memory error:', e.message);
     res.json({ memory: existingMemory || '' });
   }
 });
 
-// ── MEMORY ENDPOINTS ──────────────────────────────────────────────────────────
 app.post('/api/memory/save', async (req, res) => {
-  const { userId, fact, existingMemory } = req.body;
-  if (!fact || !GEMINI_KEY) return res.json({ success: false });
-  const newMemory = (existingMemory || '') + '\n- ' + fact;
-  res.json({ success: true, memory: newMemory.trim() });
+  const { fact, existingMemory } = req.body;
+  if (!fact) return res.json({ success: false });
+  res.json({ success: true, memory: ((existingMemory || '') + '\n- ' + fact).trim() });
 });
 
 app.post('/api/memory/clear', async (req, res) => {
@@ -393,34 +414,40 @@ app.post('/api/memory/clear', async (req, res) => {
 app.post('/api/analyze-image', async (req, res) => {
   const { imageBase64, mimeType, userName, question } = req.body;
   if (!imageBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
-  const userQ = question || `Analyze this image thoroughly. Describe clearly what you see, be detailed and specific. Then ask ${userName || 'the user'} one useful question about it.`;
+  const userQ = question || `Analyze this image. Be specific and detailed. Then ask ${userName || 'the user'} one useful question about it.`;
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } }, { text: userQ }] }],
+        contents: [{ parts: [
+          { inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } },
+          { text: userQ }
+        ]}],
         generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
       })
     });
     const d = await r.json();
-    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'Interesting image. What would you like to know about it?' });
+    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'What would you like to know about this?' });
   } catch (e) { res.json({ reply: 'Could not analyze image. Try again.' }); }
 });
 
-// ── FILE/PDF ANALYSIS ─────────────────────────────────────────────────────────
+// ── FILE ANALYSIS ─────────────────────────────────────────────────────────────
 app.post('/api/analyze-file', async (req, res) => {
   const { fileBase64, mimeType, fileName, question, userName } = req.body;
   if (!fileBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
-  const userQ = question || `Analyze "${fileName || 'document'}" thoroughly. Give complete summary, key points, important data. Then ask ${userName || 'the user'} what specific part they need help with.`;
+  const userQ = question || `Analyze "${fileName || 'document'}" thoroughly. Summary, key points, important data. Then ask what specific part they need help with.`;
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: mimeType || 'application/pdf', data: fileBase64 } }, { text: userQ }] }],
+        contents: [{ parts: [
+          { inline_data: { mime_type: mimeType || 'application/pdf', data: fileBase64 } },
+          { text: userQ }
+        ]}],
         generationConfig: { maxOutputTokens: 3000, temperature: 0.7 }
       })
     });
@@ -435,7 +462,7 @@ app.post('/api/speak', async (req, res) => {
   const key = userKey || ELEVEN_KEY;
   const voice = voiceId || 'QTKSa2Iyv0yoxvXY2V8a';
   if (!text) return res.status(400).json({ error: 'No text provided' });
-  if (!key) return res.status(200).json({ error: 'no_key', msg: 'ElevenLabs key not found. Add your key in Settings.' });
+  if (!key) return res.status(200).json({ error: 'no_key', msg: 'Add your ElevenLabs key in Settings.' });
   try {
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
       method: 'POST',
@@ -454,7 +481,6 @@ app.post('/api/speak', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── VOICE PREVIEW ─────────────────────────────────────────────────────────────
 app.post('/api/voice-preview', async (req, res) => {
   const { voiceId } = req.body;
   if (!voiceId || !ELEVEN_KEY) return res.status(400).json({ error: 'No key' });
@@ -463,7 +489,7 @@ app.post('/api/voice-preview', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'xi-api-key': ELEVEN_KEY },
       body: JSON.stringify({
-        text: "Hi! I'm Riya. Ask me anything.",
+        text: "Hi, I'm Riya. Ask me anything.",
         model_id: 'eleven_turbo_v2_5',
         language_code: 'en',
         voice_settings: { stability: 0.55, similarity_boost: 0.82 }
@@ -478,20 +504,11 @@ app.post('/api/voice-preview', async (req, res) => {
 
 // ── HEALTH ────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({
-  status: '✅ Riya v5.2 — Brain Updated',
-  routing: {
-    chat: 'Gemini 2.0 Flash primary → Groq backup',
-    streaming: 'Groq (Pro users)',
-    code: 'Gemini auto-fix + run',
-    images: 'Gemini Imagen 3 (5/day free)',
-    search: 'Tavily advanced',
-    files: 'Gemini 2.0 Flash Vision',
-    voice: 'User own ElevenLabs key'
-  },
+  status: '✅ Riya v5.3 — Brain + Format + Live Search',
+  today: getDate(),
   keys: { groq: !!GROQ_KEY, gemini: !!GEMINI_KEY, tavily: !!TAVILY_KEY, eleven: !!ELEVEN_KEY },
-  note: !ELEVEN_KEY ? '⚠️ ElevenLabs key missing' : '✅ All keys loaded',
   uptime: Math.floor(process.uptime()) + 's'
 }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Riya v5.2 Brain Updated on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Riya v5.3 — ${getDate()}`));
