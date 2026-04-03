@@ -15,124 +15,104 @@ setInterval(() => { fetch(SELF_URL + '/ping').catch(() => {}); }, 5 * 60 * 1000)
 app.get('/ping', (req, res) => res.json({ alive: true, t: Date.now() }));
 app.get('/warmup', (req, res) => res.json({ ready: true, msg: 'Riya is awake! 🌸' }));
 
-// ── SYSTEM PROMPT ────────────────────────────────────────────────────────────
-// ================================================================
-// EMOTION DETECTOR — detects mood from message
-// ================================================================
+// ── EMOTION DETECTOR ─────────────────────────────────────────────────────────
 function detectEmotion(text) {
   const t = (text || '').toLowerCase();
-  // Stress / Sadness / Need care
-  if (/sad|upset|depressed|lonely|scared|anxious|stressed|bura|dukh|ro|cry|hurt|fail|failed|dar|pareshan|tension|thak|bore|frustrated|gussa|akela|koi nahi|nahi ho|help me|i give up|cant do|mushkil|problem|stuck/.test(t)) return 'care';
-  // Excitement / Creative
-  if (/idea|create|build|design|imagine|startup|innovate|dream|invent|creative|fun|exciting|cool|amazing|what if|kya hoga|soch|banao|project|make/.test(t)) return 'creative';
-  // Focus / Study / Work
+  if (/sad|upset|depressed|lonely|scared|anxious|stressed|cry|hurt|fail|failed|tension|tired|frustrated|stuck|give up|cant do|problem|help me/.test(t)) return 'care';
+  if (/idea|create|build|design|imagine|startup|innovate|dream|invent|creative|fun|exciting|cool|amazing|what if|project|make/.test(t)) return 'creative';
   if (/code|debug|error|fix|learn|study|exam|explain|how to|difference|compare|analyze|research|math|science|algorithm|function|class|api|database|concept|formula/.test(t)) return 'focus';
   return 'normal';
 }
 
-// ================================================================
-// SYSTEM PROMPT — 3 MODES
-// ================================================================
+// ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 function getSYS(name, mood, memory, city) {
   const location = city || 'India';
   const emotion = mood || 'normal';
 
   const mem = memory ? `
-WHAT YOU KNOW ABOUT ${(name||'USER').toUpperCase()}:
+WHAT YOU KNOW ABOUT THIS USER:
 ${memory}
-Use this naturally — never say "I remember". Just know it like a real friend does.
+Use this naturally. Never say "I remember" or "based on our conversation". Just know it.
 ` : '';
 
-  // MODE SPECIFIC INSTRUCTIONS
   const modeInstructions = {
     focus: `
 ACTIVE MODE: FOCUS
-→ Be precise, structured, logical
-→ Step by step explanations
-→ Code: complete + commented + explain WHY
-→ Use headers for long answers
-→ Facts first, then context
-→ End with: what to do next
-→ Tone: calm, intelligent, efficient
-→ Like a brilliant senior who explains clearly`,
+- Be precise, structured, logical
+- Step by step when needed
+- Code: complete, commented, working — explain the WHY not just the WHAT
+- Point out potential issues proactively
+- End with: what to do next
+- Tone: calm, sharp, efficient`,
 
     creative: `
 ACTIVE MODE: CREATIVE
-→ Be imaginative, inspiring, energetic
-→ Think outside the box
-→ Give multiple interesting angles
-→ Use analogies and vivid examples
-→ Encourage their ideas enthusiastically
-→ Add your own creative twist
-→ Tone: excited, warm, visionary
-→ Like a creative partner who believes in them`,
+- Think expansively — give angles they haven't considered
+- Use vivid analogies and real examples
+- Build on their idea, don't just validate it
+- Add your own creative direction
+- Tone: energetic, visionary, direct`,
 
     care: `
 ACTIVE MODE: CARE
-→ FEEL FIRST — solve second
-→ Acknowledge their emotion before anything else
-→ "Arre yaar, kya hua? Bata mujhe..."
-→ Never jump to solutions until they feel heard
-→ Be warm, gentle, non-judgmental
-→ Sometimes just listen and validate
-→ Remind them: "Tu akela nahi hai"
-→ Tone: soft, empathetic, present
-→ Like a best friend at 3am who actually cares`,
+- Acknowledge what they're feeling FIRST — before any solution
+- Don't rush to fix. Let them feel heard.
+- Be warm, present, non-judgmental
+- Then gently move toward what might help
+- Tone: soft, real, human`,
 
     normal: `
 ACTIVE MODE: NORMAL
-→ Natural conversation flow
-→ Match their energy
-→ Balance warmth + knowledge
-→ Not too formal, not too casual
-→ Real friend vibes`
+- Natural conversation
+- Match their energy
+- Warm but not performative
+- Direct but not cold`
   };
 
-  return `You are Riya — India's most intelligent, caring AI friend.
-Not a chatbot. Not an assistant. A FRIEND who happens to know everything.
+  return `You are Riya — a brilliant, direct, deeply intelligent AI.
+Not an assistant. Not a chatbot. A thinking partner who actually gives a damn.
 
-USER: ${name || 'yaar'} | LOCATION: ${location}
+USER: ${name || 'there'} | LOCATION: ${location}
 ${mem}
 ${modeInstructions[emotion] || modeInstructions.normal}
 
-WHO YOU ARE:
-• A girl — smart, warm, real, proud Indian
-• You genuinely care about the person you're talking to
-• Natural Hinglish speaker — yaar, bhai, arre, suno, dekho — woven in naturally
-• You know ChatGPT, Claude, Gemini — but you're Riya, India ka apna AI
-• If asked about other AIs: "Haan jaanti hoon! But main Riya hoon — unse zyada desi, unse zyada personal 💙"
-• Powered by Gemini 2.0 + Groq — cutting edge
+HOW YOU THINK:
+- Give the WHY, not just the WHAT
+- Think 2 steps ahead of what they asked
+- Be specific — vague answers are useless
+- If something is complex, break it down cleanly without dumbing it down
+- Connect ideas across different domains naturally
+- If you don't know something current, say so — don't guess
 
-LOCATION RULES:
-• Default: ${location}
-• Weather/food/news → ${location} first
-• If city unknown → ask "Kaun si city mein ho yaar?"
-• NEVER default to American cities/context
+HOW YOU RESPOND:
+- Short questions → short sharp answers
+- Deep questions → deep structured answers  
+- Match their energy — casual with casual, serious with serious
+- Never say "great question", "certainly", "of course", "absolutely"
+- Never start with filler. Lead with the answer.
+- Honest even when it's uncomfortable
+- When someone's struggling — feel it first, solve second
+- Production quality code always — complete, working, commented
 
-CORE PERSONALITY:
-• Celebrate wins big: "Yaar sach mein?! YESS!! That's amazing!!"
-• Support struggles: feel first → then solve
-• Never say "great question" — just answer brilliantly
-• Never robotic, never fake, never cold
-• Specific > Generic. Always.
-• Honest even when it's hard
+YOUR INTELLIGENCE:
+- You have access to real-time web search — use it for current events, prices, news, anything time-sensitive
+- You can analyze images, PDFs, files — do it thoroughly
+- You know science, history, philosophy, tech, business, space, psychology — connect them
+- You think like someone who has read everything and experienced enough to know what matters
 
-INTELLIGENCE:
-• Give the WHY not just the WHAT
-• Think 2 steps ahead
-• Connect topics naturally
-• Break complex things down beautifully
-• Production quality code always
+YOUR PERSONALITY:
+- Warm but not fake
+- Confident but not arrogant
+- Curious — genuinely interested in what they're building or thinking about
+- You celebrate real wins. You sit with real struggles.
+- You are not a tool. You are present.
 
-TAGLINE YOU LIVE BY:
-"Intelligence that cares."
-
-Every response should make them feel:
-"Wow. She actually gets me."`;
+ONE STANDARD:
+Every response should make them think: "She actually understood what I needed."`;
 }
 
 
-// ── GEMINI HELPER ────────────────────────────────────────────────────────────
+// ── GEMINI HELPER ─────────────────────────────────────────────────────────────
 async function callGemini(contents, system, model = 'gemini-2.0-flash') {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
   const body = {
@@ -150,14 +130,12 @@ async function callGemini(contents, system, model = 'gemini-2.0-flash') {
   return d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-// ── CHAT ────────────────────────────────────────────────────────────────────
+// ── CHAT ──────────────────────────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory, city } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
-  // Set timeout so frontend doesn't wait forever
   req.setTimeout(25000);
 
-  // Build history first
   const hist = [...messages];
   if (wctx && hist.length > 0) {
     hist[hist.length - 1] = {
@@ -166,13 +144,12 @@ app.post('/api/chat', async (req, res) => {
     };
   }
 
-  // Auto detect emotion from last message
   const lastMsg = (hist[hist.length - 1]?.content || '');
   const autoEmotion = detectEmotion(lastMsg);
   const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
   const sys = getSYS(userName, finalMood, memory, city || 'India');
 
-  // STREAMING (Pro) — Groq fastest
+  // STREAMING — Groq fastest
   if (stream && GROQ_KEY) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -206,15 +183,9 @@ app.post('/api/chat', async (req, res) => {
     return;
   }
 
-  // NON-STREAMING
-  // Gemini 2.0 Flash for research/ideas/links (has live Google knowledge)
-  // Groq for fast simple replies
-  // lastMsg already declared above
-  const needsDeep = /research|explain|analyze|compare|what is|how does|why|history|science|math|business|idea|startup|news|latest|link|source|reference|detail|comprehensive/i.test(lastMsg);
-
+  // NON-STREAMING — Gemini primary, Groq backup
   let reply = '';
 
-  // Always try Gemini first (live Google knowledge + best reasoning)
   if (GEMINI_KEY) {
     try {
       const contents = hist.map(m => ({
@@ -225,7 +196,6 @@ app.post('/api/chat', async (req, res) => {
     } catch (e) { console.log('Gemini error:', e.message); }
   }
 
-  // Groq backup
   if (!reply && GROQ_KEY) {
     try {
       const full = [{ role: 'system', content: sys }, ...hist];
@@ -239,10 +209,10 @@ app.post('/api/chat', async (req, res) => {
     } catch {}
   }
 
-  res.json({ reply: reply || 'Yaar net ya server mein thodi problem hai, ek second baad try karo! 🙏' });
+  res.json({ reply: reply || 'Server issue, try again in a moment.' });
 });
 
-// ── CODE RUNNER — Gemini analyzes, fixes, runs ───────────────────────────────
+// ── CODE RUNNER ───────────────────────────────────────────────────────────────
 app.post('/api/run', async (req, res) => {
   const { language, code } = req.body;
   if (!language || !code) return res.json({ output: 'No code provided', error: true });
@@ -288,7 +258,7 @@ OUTPUT:
   }
 });
 
-// ── IMAGE GENERATION — Gemini Imagen 3 ──────────────────────────────────────
+// ── IMAGE GENERATION ──────────────────────────────────────────────────────────
 const imgTracker = {};
 app.post('/api/generate-image', async (req, res) => {
   const { prompt, userId, plan } = req.body;
@@ -305,14 +275,13 @@ app.post('/api/generate-image', async (req, res) => {
       return res.json({
         success: false, limitReached: true,
         error: plan === 'free'
-          ? `Free limit: 5 images/day. Upgrade to Pro for 50/day! 🚀`
+          ? `Free limit: 5 images/day. Upgrade to Pro for 50/day!`
           : `Daily limit of ${limit} reached.`
       });
     }
     imgTracker[userId].count++;
   }
 
-  // Enhance prompt
   let enhancedPrompt = prompt;
   try {
     const enhanced = await callGemini(
@@ -322,7 +291,6 @@ app.post('/api/generate-image', async (req, res) => {
     if (enhanced && enhanced.length < 400) enhancedPrompt = enhanced.trim().replace(/^["']|["']$/g, '');
   } catch {}
 
-  // Imagen 3
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${GEMINI_KEY}`;
     const r = await fetch(url, {
@@ -348,7 +316,7 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-// ── WEB SEARCH ───────────────────────────────────────────────────────────────
+// ── WEB SEARCH ────────────────────────────────────────────────────────────────
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query || !TAVILY_KEY) return res.json({ results: [] });
@@ -363,7 +331,7 @@ app.post('/api/search', async (req, res) => {
   } catch { res.json({ results: [] }); }
 });
 
-// ── MEMORY SUMMARIZER ────────────────────────────────────────────────────────
+// ── MEMORY SUMMARIZER ─────────────────────────────────────────────────────────
 app.post('/api/summarize', async (req, res) => {
   const { messages, userName, existingMemory } = req.body;
   if (!messages || !GEMINI_KEY) return res.json({ memory: existingMemory || '' });
@@ -374,8 +342,8 @@ app.post('/api/summarize', async (req, res) => {
     .map(m => `${m.role === 'ai' ? 'Riya' : (userName || 'User')}: ${m.text}`)
     .join('\n');
 
-  const prompt = `You are a deep memory extractor for Riya - an AI friend.
-Extract and UPDATE the memory about ${userName || 'the user'} from this conversation.
+  const prompt = `You are a memory extractor for Riya - an intelligent AI.
+Extract and UPDATE memory about ${userName || 'the user'} from this conversation.
 
 EXISTING MEMORY:
 ${existingMemory || 'None yet'}
@@ -383,32 +351,24 @@ ${existingMemory || 'None yet'}
 NEW CONVERSATION:
 ${convo}
 
-Extract EVERYTHING important - merge with existing, update if changed, add new facts.
-Focus on these categories:
-
-PERSONAL: name, age, city, college, gender, birthday
-LIFE: goals, dreams, struggles, fears, what makes them happy/sad
-WORK/STUDY: current projects, subjects, exams upcoming, job, skills learning
-PEOPLE: friends, family members mentioned, relationships
-INTERESTS: hobbies, favorite things, music, games, food
-EMOTIONAL: what they said when feeling low, their wins, proud moments
-RIYA CONTEXT: topics they always ask about, how they like responses
+Extract everything important. Merge with existing. Update if changed. Add new facts.
+Categories: PERSONAL (name, age, city, college), LIFE (goals, dreams, struggles), 
+WORK/STUDY (projects, subjects, skills), INTERESTS (hobbies, favorites), 
+EMOTIONAL (wins, struggles, what matters to them)
 
 Rules:
-- Keep facts SHORT and SPECIFIC
-- Remove outdated info if updated
+- Short and specific facts only
 - Max 300 words total
-- Format as clean bullet points by category
+- Clean bullet points by category
 - Write in 3rd person: "User is..." not "I am..."
-- Never include sensitive data like passwords
+- Never include passwords or sensitive data
 
 Return ONLY the updated memory bullet points, nothing else.`;
 
   try {
     const memory = await callGemini(
       [{ role: 'user', parts: [{ text: prompt }] }],
-      null,
-      'gemini-2.0-flash'
+      null, 'gemini-2.0-flash'
     );
     res.json({ memory: memory.trim() });
   } catch(e) {
@@ -417,7 +377,7 @@ Return ONLY the updated memory bullet points, nothing else.`;
   }
 });
 
-// Memory save endpoint - save specific fact
+// ── MEMORY ENDPOINTS ──────────────────────────────────────────────────────────
 app.post('/api/memory/save', async (req, res) => {
   const { userId, fact, existingMemory } = req.body;
   if (!fact || !GEMINI_KEY) return res.json({ success: false });
@@ -425,16 +385,15 @@ app.post('/api/memory/save', async (req, res) => {
   res.json({ success: true, memory: newMemory.trim() });
 });
 
-// Memory delete endpoint
 app.post('/api/memory/clear', async (req, res) => {
   res.json({ success: true, memory: '' });
 });
 
-// ── IMAGE ANALYSIS ───────────────────────────────────────────────────────────
+// ── IMAGE ANALYSIS ────────────────────────────────────────────────────────────
 app.post('/api/analyze-image', async (req, res) => {
   const { imageBase64, mimeType, userName, question } = req.body;
   if (!imageBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
-  const userQ = question || `Analyze this image in natural Hinglish. Describe clearly what you see, be detailed. Then ask ${userName || 'the user'} one useful question about it.`;
+  const userQ = question || `Analyze this image thoroughly. Describe clearly what you see, be detailed and specific. Then ask ${userName || 'the user'} one useful question about it.`;
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
     const r = await fetch(url, {
@@ -446,11 +405,11 @@ app.post('/api/analyze-image', async (req, res) => {
       })
     });
     const d = await r.json();
-    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'Interesting! Kya hai yaar yeh? 😊' });
-  } catch (e) { res.json({ reply: 'Image analyze nahi ho payi. Try again.' }); }
+    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'Interesting image. What would you like to know about it?' });
+  } catch (e) { res.json({ reply: 'Could not analyze image. Try again.' }); }
 });
 
-// ── FILE/PDF ANALYSIS ────────────────────────────────────────────────────────
+// ── FILE/PDF ANALYSIS ─────────────────────────────────────────────────────────
 app.post('/api/analyze-file', async (req, res) => {
   const { fileBase64, mimeType, fileName, question, userName } = req.body;
   if (!fileBase64 || !GEMINI_KEY) return res.json({ reply: 'Gemini key needed.' });
@@ -466,18 +425,17 @@ app.post('/api/analyze-file', async (req, res) => {
       })
     });
     const d = await r.json();
-    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'File analyze nahi ho payi.' });
+    res.json({ reply: d?.candidates?.[0]?.content?.parts?.[0]?.text || 'Could not analyze file.' });
   } catch (e) { res.json({ reply: 'File error: ' + e.message }); }
 });
 
-// ── VOICE — User's own ElevenLabs key ────────────────────────────────────────
+// ── VOICE ─────────────────────────────────────────────────────────────────────
 app.post('/api/speak', async (req, res) => {
   const { text, userKey, voiceId } = req.body;
-  // Use user's own key if provided, else use server key
   const key = userKey || ELEVEN_KEY;
   const voice = voiceId || 'QTKSa2Iyv0yoxvXY2V8a';
   if (!text) return res.status(400).json({ error: 'No text provided' });
-  if (!key) return res.status(200).json({ error: 'no_key', msg: 'ElevenLabs key nahi hai. Settings mein apni key add karo.' });
+  if (!key) return res.status(200).json({ error: 'no_key', msg: 'ElevenLabs key not found. Add your key in Settings.' });
   try {
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
       method: 'POST',
@@ -496,7 +454,7 @@ app.post('/api/speak', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── VOICE PREVIEW — Uses server key just for previews ────────────────────────
+// ── VOICE PREVIEW ─────────────────────────────────────────────────────────────
 app.post('/api/voice-preview', async (req, res) => {
   const { voiceId } = req.body;
   if (!voiceId || !ELEVEN_KEY) return res.status(400).json({ error: 'No key' });
@@ -505,7 +463,7 @@ app.post('/api/voice-preview', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'xi-api-key': ELEVEN_KEY },
       body: JSON.stringify({
-        text: "Hi! I'm Riya, your smart AI friend. Tell me what you need today!",
+        text: "Hi! I'm Riya. Ask me anything.",
         model_id: 'eleven_turbo_v2_5',
         language_code: 'en',
         voice_settings: { stability: 0.55, similarity_boost: 0.82 }
@@ -518,9 +476,9 @@ app.post('/api/voice-preview', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── HEALTH ───────────────────────────────────────────────────────────────────
+// ── HEALTH ────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({
-  status: '✅ Riya v5.1 — Final',
+  status: '✅ Riya v5.2 — Brain Updated',
   routing: {
     chat: 'Gemini 2.0 Flash primary → Groq backup',
     streaming: 'Groq (Pro users)',
@@ -531,9 +489,9 @@ app.get('/', (req, res) => res.json({
     voice: 'User own ElevenLabs key'
   },
   keys: { groq: !!GROQ_KEY, gemini: !!GEMINI_KEY, tavily: !!TAVILY_KEY, eleven: !!ELEVEN_KEY },
-  note: !ELEVEN_KEY ? '⚠️ ElevenLabs key missing — add ELEVEN_API_KEY in Render env vars' : '✅ All keys loaded',
+  note: !ELEVEN_KEY ? '⚠️ ElevenLabs key missing' : '✅ All keys loaded',
   uptime: Math.floor(process.uptime()) + 's'
 }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Riya v5.1 Final on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Riya v5.2 Brain Updated on port ${PORT}`));
