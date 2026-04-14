@@ -143,11 +143,7 @@ app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, plan, stream, wctx, memory, city } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
 
-  // Auto detect emotion from last message
-  const lastMsg = (hist[hist.length-1]?.content || '');
-  const autoEmotion = detectEmotion(lastMsg);
-  const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
-  const sys = getSYS(userName, finalMood, memory, city || 'India');
+  // Build hist FIRST
   const hist = [...messages];
   if (wctx && hist.length > 0) {
     hist[hist.length - 1] = {
@@ -156,74 +152,89 @@ app.post('/api/chat', async (req, res) => {
     };
   }
 
-  // STREAMING (Pro) — Groq fastest
-  if (stream && GROQ_KEY) {
+  // Now detect emotion from last message
+  const lastMsg = (hist[hist.length-1]?.content || '');
+  const autoEmotion = detectEmotion(lastMsg);
+  const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
+  const sys = getSYS(userName, finalMood, memory, city || 'India');
+
+  // STREAMING — Groq for all users (fastest, feels alive)
+  if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    try {
-      const full = [{ role: 'system', content: sys }, ...hist];
-      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8, stream: true })
-      });
-      const reader = r.body.getReader(), dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const line of dec.decode(value).split('\n').filter(l => l.trim())) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try {
-              const d = JSON.parse(line.slice(6));
-              const t = d.choices?.[0]?.delta?.content;
-              if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
-            } catch {}
+
+    // Decide: deep question → Gemini (smarter), simple → Groq (faster)
+    const isDeep = /explain|why|how|what is|difference|compare|history|science|philosophy|meaning|consciousness|code|debug|build|create|analyze|research|math|theory/i.test(lastMsg);
+
+    // Try Groq first (streaming) — fast
+    if (GROQ_KEY) {
+      try {
+        const full = [{ role: 'system', content: sys }, ...hist];
+        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.75, stream: true })
+        });
+        const reader = r.body.getReader(), dec = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          for (const line of dec.decode(value).split('\n').filter(l => l.trim())) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const d = JSON.parse(line.slice(6));
+                const t = d.choices?.[0]?.delta?.content;
+                if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
+              } catch {}
+            }
           }
         }
-      }
-      res.write('data: [DONE]\n\n'); res.end();
-    } catch {
-      res.write(`data: ${JSON.stringify({ token: 'Error. Try again!' })}\n\n`);
-      res.write('data: [DONE]\n\n'); res.end();
+        res.write('data: [DONE]\n\n'); res.end(); return;
+      } catch (e) { console.log('Groq stream error:', e.message); }
     }
+
+    // Fallback: Gemini non-streaming → stream manually
+    if (GEMINI_KEY) {
+      try {
+        const contents = hist.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || '' }] }));
+        const reply = await callGemini(contents, sys, 'gemini-2.0-flash');
+        // Send word by word for streaming feel
+        const words = reply.split(' ');
+        for (const word of words) {
+          res.write(`data: ${JSON.stringify({ token: word + ' ' })}\n\n`);
+          await new Promise(r => setTimeout(r, 8));
+        }
+        res.write('data: [DONE]\n\n'); res.end(); return;
+      } catch (e) { console.log('Gemini fallback error:', e.message); }
+    }
+
+    res.write(`data: ${JSON.stringify({ token: 'Connection issue. Try again!' })}\n\n`);
+    res.write('data: [DONE]\n\n'); res.end();
     return;
   }
 
-  // NON-STREAMING
-  // Gemini 2.0 Flash for research/ideas/links (has live Google knowledge)
-  // Groq for fast simple replies
-  // lastMsg already declared above
-  const needsDeep = /research|explain|analyze|compare|what is|how does|why|history|science|math|business|idea|startup|news|latest|link|source|reference|detail|comprehensive/i.test(lastMsg);
-
+  // NON-STREAMING fallback
   let reply = '';
-
-  // Always try Gemini first (live Google knowledge + best reasoning)
   if (GEMINI_KEY) {
     try {
-      const contents = hist.map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content || '' }]
-      }));
+      const contents = hist.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || '' }] }));
       reply = await callGemini(contents, sys, 'gemini-2.0-flash');
     } catch (e) { console.log('Gemini error:', e.message); }
   }
-
-  // Groq backup
   if (!reply && GROQ_KEY) {
     try {
       const full = [{ role: 'system', content: sys }, ...hist];
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.8 })
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.75 })
       });
       const d = await r.json();
       reply = d.choices?.[0]?.message?.content || '';
     } catch {}
   }
-
-  res.json({ reply: reply || 'Yaar connectivity issue! Ek baar aur try karo 😅' });
+  res.json({ reply: reply || 'Connection issue. Try again!' });
 });
 
 // ── CODE RUNNER — Gemini analyzes, fixes, runs ───────────────────────────────
@@ -336,11 +347,16 @@ app.post('/api/generate-image', async (req, res) => {
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
   if (!query || !TAVILY_KEY) return res.json({ results: [] });
+
+  // Only search for things that actually need live data
+  const needsLive = /news|today|latest|now|current|price|weather|score|match|live|trending|stock|2024|2025|2026|recent|update|launched|release/i.test(query);
+  if (!needsLive) return res.json({ results: [] });
+
   try {
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TAVILY_KEY}` },
-      body: JSON.stringify({ query, search_depth: 'advanced', max_results: 5 })
+      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4 })
     });
     const d = await r.json();
     res.json({ results: d.results || [] });
