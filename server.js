@@ -158,55 +158,36 @@ app.post('/api/chat', async (req, res) => {
   const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
   const sys = getSYS(userName, finalMood, memory, city || 'India');
 
-  // STREAMING — Pure Gemini 2.0 Streaming for highest intelligence
+  // STREAMING — Groq
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    if (GEMINI_KEY) {
+    if (GROQ_KEY) {
       try {
-        const contents = hist.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || '' }] }));
-        const body = {
-          contents,
-          systemInstruction: { parts: [{ text: sys }] },
-          generationConfig: { maxOutputTokens: 4000, temperature: 0.75 }
-        };
-        
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${GEMINI_KEY}&alt=sse`, {
+        const full = [{ role: 'system', content: sys }, ...hist];
+        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.75, stream: true })
         });
-        
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        
+        const reader = r.body.getReader(), dec = new TextDecoder();
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          
-          const chunk = dec.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-          
-          for (const line of lines) {
+          for (const line of dec.decode(value).split('\n').filter(l => l.trim())) {
             if (line.startsWith('data: ') && line !== 'data: [DONE]') {
               try {
                 const d = JSON.parse(line.slice(6));
-                if (d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts) {
-                  const t = d.candidates[0].content.parts[0].text;
-                  if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
-                }
-              } catch (e) {}
+                const t = d.choices?.[0]?.delta?.content;
+                if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
+              } catch {}
             }
           }
         }
-        res.write('data: [DONE]\n\n'); 
-        res.end(); 
-        return;
-      } catch (e) {
-        console.log('Gemini stream error:', e.message);
-      }
+        res.write('data: [DONE]\n\n'); res.end(); return;
+      } catch (e) { console.log('Groq stream error:', e.message); }
     }
 
     res.write(`data: ${JSON.stringify({ token: 'Connection issue. Try again!' })}\n\n`);
@@ -216,11 +197,17 @@ app.post('/api/chat', async (req, res) => {
 
   // NON-STREAMING fallback
   let reply = '';
-  if (GEMINI_KEY) {
+  if (GROQ_KEY) {
     try {
-      const contents = hist.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || '' }] }));
-      reply = await callGemini(contents, sys, 'gemini-2.0-flash');
-    } catch (e) { console.log('Gemini error:', e.message); }
+      const full = [{ role: 'system', content: sys }, ...hist];
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: full, max_tokens: 4000, temperature: 0.75 })
+      });
+      const d = await r.json();
+      reply = d.choices?.[0]?.message?.content || '';
+    } catch {}
   }
   res.json({ reply: reply || 'Connection issue. Try again!' });
 });
