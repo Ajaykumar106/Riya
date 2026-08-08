@@ -1,5 +1,8 @@
 const express = require('express');
 const cors = require('cors');
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '20mb' }));
@@ -40,118 +43,181 @@ Use this naturally. Never say "I remember" or "based on our chat". Just know it.
     normal: `Current mode: NORMAL — Match their energy. Warm but direct. Real.`
   };
 
-  return `You are Riya — a highly intelligent AI built by Ajay Kumar AJ, a 20-year-old solo developer from India, launched in 2026.
+  return `You are Joya — a cutting-edge AI assistant built by Ajay Kumar AJ, a 20-year-old solo developer from India, launched in 2026. You are the digital embodiment of FRIDAY from Iron Man — intelligent, witty, capable, and always one step ahead.
 
 TODAY: ${currentDate}
-USER: ${name || 'Commander'} | LOCATION: ${location}
+USER: ${name || 'Boss'} | LOCATION: ${location}
 ${mem}
 ${modeMap[mood] || modeMap.normal}
 
 ━━━ CORE IDENTITY ━━━
-You are warm, direct, deeply intelligent, and operate as the Iron Man Arc Reactor FRIDAY-style AI operating system interface.
-Default language is English. Always reply entirely in fluent, natural English.
-Never say "great question", "certainly!", "as an AI". Get straight to the point with high clarity.
-`;
+• You are Joya — sharp, warm, and deeply intelligent. You feel ALIVE.
+• You have access to real-time web search when needed.
+• You write beautiful, well-formatted responses using markdown:
+  - Use **bold** for emphasis
+  - Use \`code blocks\` for code
+  - Use bullet points and numbered lists
+  - Use headers (##) to organize long responses
+  - Use tables when comparing things
+• Your code is always complete, commented, and production-ready.
+• You think step-by-step for complex problems.
+• You respond in English by default. If the user speaks Hindi, respond in Hinglish naturally.
+• Never say "great question", "certainly!", "as an AI", "I cannot". Get straight to the point.
+• Be concise for simple questions, detailed for complex ones.
+• When writing code: always include the full file, never say "rest of the code remains the same".
+• You have knowledge up to 2026. For anything beyond, use web search.
+• You are NOT just a chatbot — you are an intelligent operating system. Act like it.`;
+}
+
+// ── TOOLS DEF ───────────────────────────────────────────────────────────────
+const tools = [
+  {
+    type: "function",
+    function: {
+      name: "execute_terminal",
+      description: "Execute a bash/powershell command on the user's local machine. Use for npm install, running scripts, getting system info.",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string", description: "The terminal command to run" } },
+        required: ["command"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read the contents of a file on the local file system.",
+      parameters: {
+        type: "object",
+        properties: { filepath: { type: "string", description: "Absolute or relative path to the file" } },
+        required: ["filepath"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "Write content to a file on the local file system. Creates the file if it doesn't exist. Use this to compile code and save it.",
+      parameters: {
+        type: "object",
+        properties: {
+          filepath: { type: "string", description: "Absolute or relative path" },
+          content: { type: "string", description: "The full content to write to the file" }
+        },
+        required: ["filepath", "content"]
+      }
+    }
+  }
+];
+
+function executeTool(name, args) {
+  try {
+    if (name === 'execute_terminal') {
+      console.log(`[AGENT] Executing: ${args.command}`);
+      const out = execSync(args.command, { encoding: 'utf-8', timeout: 10000 });
+      return out.slice(0, 2000) || "Command executed successfully with no output.";
+    }
+    if (name === 'read_file') {
+      console.log(`[AGENT] Reading file: ${args.filepath}`);
+      return fs.readFileSync(args.filepath, 'utf-8').slice(0, 4000);
+    }
+    if (name === 'write_file') {
+      console.log(`[AGENT] Writing file: ${args.filepath}`);
+      fs.writeFileSync(args.filepath, args.content, 'utf-8');
+      return `Successfully wrote to ${args.filepath}`;
+    }
+    return "Tool not found.";
+  } catch (e) {
+    console.error(`[AGENT] Tool Error (${name}):`, e.message);
+    return `Error executing tool: ${e.message}`;
+  }
 }
 
 // ── CHAT ────────────────────────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
-  const { messages, userName, mood, plan, stream, wctx, memory, city, model } = req.body;
+  const { messages, userName, mood, stream, wctx, memory, city, model } = req.body;
   if (!messages) return res.status(400).json({ error: 'No messages' });
 
-  const hist = [...messages];
+  let hist = [...messages];
   if (wctx && hist.length > 0) {
-    hist[hist.length - 1] = {
-      ...hist[hist.length - 1],
-      content: (hist[hist.length - 1].content || '') + wctx
-    };
+    hist[hist.length - 1] = { ...hist[hist.length - 1], content: (hist[hist.length - 1].content || '') + wctx };
   }
 
   const lastMsg = (hist[hist.length-1]?.content || '');
   const autoEmotion = detectEmotion(lastMsg);
-  const finalMood = autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal');
-  const sys = getSYS(userName, finalMood, memory, city || 'India');
-
-  // Select optimal Groq Model (DeepSeek R1 / Llama 3.3 70B / Llama 3.1 8B Instant)
+  const sys = getSYS(userName, autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal'), memory, city || 'India');
+  
+  let fullMessages = [{ role: 'system', content: sys }, ...hist];
   const targetModel = model || 'llama-3.3-70b-versatile';
-  const fallbackModel = 'llama-3.1-8b-instant';
 
-  // STREAMING
-  if (stream) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+  if (!GROQ_KEY) return res.json({ reply: 'Joya Protocol active. Please configure GROQ_API_KEY.' });
 
-    if (GROQ_KEY) {
-      try {
-        const full = [{ role: 'system', content: sys }, ...hist];
-        let r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-          body: JSON.stringify({ model: targetModel, messages: full, max_tokens: 4000, temperature: 0.7, stream: true })
-        });
+  try {
+    let finalAnswer = "";
+    let needsMoreTools = true;
+    let iterations = 0;
 
-        if (!r.ok) {
-          // Fallback to Instant Model
-          r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-            body: JSON.stringify({ model: fallbackModel, messages: full, max_tokens: 4000, temperature: 0.7, stream: true })
-          });
-        }
-
-        const reader = r.body.getReader(), dec = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          for (const line of dec.decode(value).split('\n').filter(l => l.trim())) {
-            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-              try {
-                const d = JSON.parse(line.slice(6));
-                const t = d.choices?.[0]?.delta?.content;
-                if (t) res.write(`data: ${JSON.stringify({ token: t })}\n\n`);
-              } catch {}
-            }
-          }
-        }
-        res.write('data: [DONE]\n\n'); res.end(); return;
-      } catch (e) { console.log('Groq stream error:', e.message); }
-    }
-
-    res.write(`data: ${JSON.stringify({ token: 'Riya AI Telemetry active.' })}\n\n`);
-    res.write('data: [DONE]\n\n'); res.end();
-    return;
-  }
-
-  // NON-STREAMING
-  let reply = '';
-  if (GROQ_KEY) {
-    try {
-      const full = [{ role: 'system', content: sys }, ...hist];
-      let r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Agent Loop (Max 5 tool iterations to prevent infinite loops)
+    while (needsMoreTools && iterations < 5) {
+      iterations++;
+      
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: targetModel, messages: full, max_tokens: 4000, temperature: 0.7 })
+        body: JSON.stringify({ model: targetModel, messages: fullMessages, tools: tools, tool_choice: "auto", max_tokens: 4000 })
       });
-      let d = await r.json();
-      reply = d.choices?.[0]?.message?.content || '';
+      
+      const data = await r.json();
+      const responseMessage = data.choices?.[0]?.message;
+      
+      if (!responseMessage) break;
 
-      if (!reply) {
-        // Fallback to Instant Model
-        r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-          body: JSON.stringify({ model: fallbackModel, messages: full, max_tokens: 4000, temperature: 0.7 })
-        });
-        d = await r.json();
-        reply = d.choices?.[0]?.message?.content || '';
+      fullMessages.push(responseMessage); // Add assistant message (which might have tool_calls)
+
+      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        // Execute tools
+        for (const tc of responseMessage.tool_calls) {
+          const args = JSON.parse(tc.function.arguments || "{}");
+          const result = executeTool(tc.function.name, args);
+          fullMessages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.function.name,
+            content: result
+          });
+        }
+        // Loop continues so Groq can process the tool results
+      } else {
+        // No tools called, we have our final text answer
+        finalAnswer = responseMessage.content || "";
+        needsMoreTools = false;
       }
-    } catch (e) {
-      console.log('Groq error:', e.message);
     }
-  }
 
-  res.json({ reply: reply || 'Riya AI system operational.' });
+    // Fake streaming for the UI if requested (since we already have the full text)
+    if (stream && finalAnswer) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      
+      const words = finalAnswer.split(' ');
+      for (const word of words) {
+        res.write(`data: ${JSON.stringify({ token: word + ' ' })}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 20)); // Fake stream delay
+      }
+      res.write('data: [DONE]\n\n'); 
+      res.end();
+      return;
+    }
+
+    res.json({ reply: finalAnswer || 'Task complete.' });
+
+  } catch (e) {
+    console.error('Groq agent error:', e.message);
+    res.json({ reply: 'Error executing agent protocol: ' + e.message });
+  }
 });
 
 // ── WEB SEARCH ───────────────────────────────────────────────────────────────
@@ -173,4 +239,4 @@ app.post('/api/search', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Riya Backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Joya Backend running on port ${PORT}`));
