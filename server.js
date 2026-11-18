@@ -3,12 +3,15 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const { Pool } = require('pg');
+const { runInSandbox, runAutonomousReActLoop } = require('./sandbox');
+const { FUNCTION_DECLARATIONS, executeTool, callGeminiAgent, extractWebPage } = require('./tools');
 
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '20mb' }));
 
-// ── ONLY ONE 100% FREE API KEY NEEDED ─────────────────────────────────────────
+// ── CORE ENVIRONMENT CONFIGURATION ────────────────────────────────────────────
 const GEMINI_KEY   = process.env.GEMINI_API_KEY    || '';
 const TELEGRAM_KEY = process.env.TELEGRAM_BOT_TOKEN || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-flash-latest';
@@ -22,13 +25,125 @@ if (!fs.existsSync(PREVIEWS_DIR)) {
   fs.mkdirSync(PREVIEWS_DIR, { recursive: true });
 }
 
+// ── NEON POSTGRESQL + PGVECTOR DEEP PERSISTENT MEMORY ─────────────────────────
+const DATABASE_URL = process.env.DATABASE_URL || '';
+
+let dbPool = null;
+if (DATABASE_URL) {
+  dbPool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000
+  });
+} else {
+  console.warn('>> [Notice] DATABASE_URL is not set in environment variables. Set DATABASE_URL in Render to enable vector memory.');
+}
+
+async function initDatabase() {
+  if (!dbPool) return;
+  try {
+    await dbPool.query('CREATE EXTENSION IF NOT EXISTS vector;');
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS riya_memories (
+        id BIGSERIAL PRIMARY KEY,
+        category VARCHAR(50) DEFAULT 'general',
+        content TEXT NOT NULL,
+        embedding vector(768),
+        importance INT DEFAULT 1,
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await dbPool.query(`CREATE INDEX IF NOT EXISTS riya_memories_category_idx ON riya_memories(category);`);
+    await dbPool.query(`CREATE INDEX IF NOT EXISTS riya_memories_embedding_hnsw_idx ON riya_memories USING hnsw (embedding vector_cosine_ops);`);
+    
+    // Create routines table for autonomous morning briefings
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS riya_routines (
+        id BIGSERIAL PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        routine_name VARCHAR(100) NOT NULL,
+        time_ist VARCHAR(10) NOT NULL,
+        prompt TEXT NOT NULL,
+        last_run_date VARCHAR(20) DEFAULT '',
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('>> [Neon DB] Persistent Vector Memory & Routine Tables Active');
+
+    // Seed core profile if empty
+    const countRes = await dbPool.query('SELECT count(*) as count FROM riya_memories;');
+    if (parseInt(countRes.rows[0].count, 10) === 0) {
+      console.log('>> [Neon DB] Seeding initial core memories for Ajay Kumar AJ...');
+      const seedFacts = [
+        { cat: 'identity', text: 'Ajay Kumar AJ is a 20-year-old solo developer and AI creator based in India, born in 2006.' },
+        { cat: 'role', text: 'Ajay is the sole architect and creator of Riya (Autonomous Operational Partner) and ViraClip AI (viral video repurposing engine).' },
+        { cat: 'philosophy', text: 'Ajay demands immediate, production-ready deliverables with zero back-and-forth survey questions or fluff.' },
+        { cat: 'tone', text: 'Riya communicates as Ajay closest intellectual partner and genuine friend—warm, perceptive, loyal, deeply supportive, and never robotic.' },
+        { cat: 'capabilities', text: 'Riya can generate compiled A4 PDF reports, deploy live interactive websites with instant preview links, export CSV tables, execute sandboxed code, and query long-term vector memory.' }
+      ];
+      for (const f of seedFacts) {
+        await saveMemoryFact(f.cat, f.text, 5);
+      }
+      console.log('>> [Neon DB] Core memory seeds planted.');
+    }
+  } catch (err) {
+    console.error('>> [Neon DB Init Warning]:', err.message);
+  }
+}
+initDatabase();
+
 // Keep Render free service awake (pings self every 14 mins)
 setInterval(() => {
   if (SELF_URL) fetch(SELF_URL + '/ping').catch(() => {});
 }, 14 * 60 * 1000);
 
-app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, t: Date.now() }));
-app.get('/healthz', (req, res) => res.json({ status: 'healthy', name: "Riya", t: Date.now() }));
+app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, memory: "Neon pgvector", tools: FUNCTION_DECLARATIONS.length, t: Date.now() }));
+app.get('/healthz', (req, res) => res.json({ status: 'healthy', name: "Riya", memory: "Active", t: Date.now() }));
+
+// ── AUTONOMOUS MORNING ROUTINE SCHEDULER (HERMES CRON ENGINE) ─────────────────
+setInterval(async () => {
+  if (!dbPool) return;
+  try {
+    const nowIST = new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const todayIST = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    const activeRoutines = await dbPool.query(
+      `SELECT * FROM riya_routines WHERE active = TRUE AND time_ist = $1 AND last_run_date != $2;`,
+      [nowIST, todayIST]
+    );
+
+    for (const r of activeRoutines.rows) {
+      await dbPool.query(`UPDATE riya_routines SET last_run_date = $1 WHERE id = $2;`, [todayIST, r.id]);
+      console.log(`>> [Autonomous Routine Triggered]: ${r.routine_name} for chat ${r.chat_id} at ${nowIST} IST`);
+
+      const sys = getSYS('Ajay', 'focus', '', 'India', []);
+      const prompt = `AUTONOMOUS SCHEDULED ROUTINE TRIGGERED FOR AJAY:
+Task: ${r.prompt}
+Search the live web for the latest viral breakthroughs and news, summarize with verified source links, and prepare a concise, high-value executive intelligence brief.`;
+
+      const res = await callGemini(sys, [{ role: 'user', content: prompt }]);
+
+      if (r.chat_id && r.chat_id !== 'general') {
+        await sendTelegramTextMessage(r.chat_id, `🌅 **Good morning, Ajay!** Here is your scheduled daily intelligence brief:\n\n${res}`);
+        try {
+          const pdfBuf = await generatePdfBuffer('Daily Morning Intelligence Brief', res);
+          await sendTelegramBufferDocument(r.chat_id, 'Morning_Brief.pdf', pdfBuf, 'application/pdf', '📄 Daily Morning Intelligence Brief (PDF)');
+        } catch (_) {}
+      }
+    }
+  } catch (err) {
+    console.error('[Routine Scheduler Error]:', err.message);
+  }
+}, 60 * 1000);
 
 // ── STATIC HOSTING FOR LIVE WEBSITE PREVIEWS ──────────────────────────────────
 app.use('/previews', express.static(PREVIEWS_DIR));
@@ -54,7 +169,7 @@ app.get(['/preview/:id', '/site/:id'], (req, res) => {
   `);
 });
 
-// Diagnostic endpoint
+// Diagnostic endpoints
 app.get('/api/test-gemini', async (req, res) => {
   const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!cleanKey) return res.json({ error: 'GEMINI_API_KEY is missing in Render Environment Variables' });
@@ -71,55 +186,230 @@ app.get('/api/test-gemini', async (req, res) => {
   }
 });
 
-// ── PERSISTENT MEMORY ─────────────────────────────────────────────────────────
-const MEMORY_FILE = path.join(__dirname, 'memory.json');
-
-function loadMemory() {
+app.get('/api/test-embedding', async (req, res) => {
+  const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   try {
-    if (fs.existsSync(MEMORY_FILE)) {
-      return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${cleanKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text: "Ajay Kumar AJ" }] },
+        outputDimensionality: 768
+      })
+    });
+    const d = await r.json();
+    res.json({
+      status: r.status,
+      dimension: d?.embedding?.values?.length,
+      hasValues: !!d?.embedding?.values
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
+// ── VECTOR EMBEDDING PIPELINE (GEMINI EMBEDDINGS) ─────────────────────────────
+async function getEmbedding(text) {
+  const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleanKey || !text) return null;
+  const modelsToTry = ['gemini-embedding-001', 'text-embedding-004'];
+  for (const model of modelsToTry) {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${cleanKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: { parts: [{ text: text.slice(0, 2048) }] },
+          outputDimensionality: 768
+        })
+      });
+      const data = await res.json();
+      if (data?.embedding?.values && data.embedding.values.length === 768) {
+        return data.embedding.values;
+      }
+    } catch (err) {
+      console.error(`[Embedding Error with ${model}]:`, err.message);
     }
-  } catch (e) {
-    console.error('[Memory] Error loading:', e.message);
   }
-  return {
-    profile: {
-      name: 'Ajay Kumar AJ',
-      age: '20 years old',
-      location: 'India',
-      role: 'Solo Developer & Creator',
-      preferences: [
-        'Wants complete, production-ready deliverables (PDFs, live websites, CSV, reports) with zero back-and-forth questions',
-        'Direct, high-IQ, composed FRIDAY-style assistance without cheesy melodrama',
-        'Only discuss specific projects when explicitly asked about them',
-        'Real verified links with sources'
-      ]
-    },
-    facts: []
-  };
+  return null;
 }
 
-function saveMemory(mem) {
+// ── SEMANTIC MEMORY RETRIEVAL (PGVECTOR HYBRID SEARCH) ────────────────────────
+async function recallMemories(queryText, limit = 5) {
+  if (!dbPool) return [];
   try {
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(mem, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('[Memory] Error saving:', e.message);
+    const embedding = await getEmbedding(queryText);
+    if (embedding && embedding.length === 768) {
+      const vecStr = '[' + embedding.join(',') + ']';
+      const res = await dbPool.query(`
+        SELECT id, category, content, importance, created_at,
+               1 - (embedding <=> $1::vector) AS similarity
+        FROM riya_memories
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector ASC
+        LIMIT $2;
+      `, [vecStr, limit]);
+      
+      return res.rows.filter(r => r.similarity >= 0.42);
+    } else {
+      const words = queryText.split(/\s+/).filter(w => w.length > 3).slice(0, 2);
+      if (words.length) {
+        const pattern = `%${words[0]}%`;
+        const res = await dbPool.query(`
+          SELECT id, category, content, importance, created_at, 0.70 as similarity
+          FROM riya_memories
+          WHERE content ILIKE $1
+          ORDER BY updated_at DESC
+          LIMIT $2;
+        `, [pattern, limit]);
+        return res.rows;
+      }
+    }
+  } catch (err) {
+    console.error('[recallMemories Error]:', err.message);
+  }
+  return [];
+}
+
+// ── AUTONOMOUS MEMORY STORAGE & DEDUPLICATION ─────────────────────────────────
+async function saveMemoryFact(category, content, importance = 1, metadata = {}) {
+  if (!dbPool || !content || content.length < 5) return null;
+  try {
+    const embedding = await getEmbedding(content);
+    if (embedding && embedding.length === 768) {
+      const vecStr = '[' + embedding.join(',') + ']';
+      
+      const checkRes = await dbPool.query(`
+        SELECT id, content, 1 - (embedding <=> $1::vector) AS similarity
+        FROM riya_memories
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector ASC
+        LIMIT 1;
+      `, [vecStr]);
+
+      if (checkRes.rows.length && checkRes.rows[0].similarity > 0.88) {
+        const existingId = checkRes.rows[0].id;
+        await dbPool.query(`
+          UPDATE riya_memories
+          SET content = $1, category = $2, importance = importance + 1, updated_at = NOW(), metadata = $3
+          WHERE id = $4;
+        `, [content, category || 'general', JSON.stringify(metadata), existingId]);
+        return { updated: true, id: existingId };
+      }
+
+      const insertRes = await dbPool.query(`
+        INSERT INTO riya_memories (category, content, embedding, importance, metadata)
+        VALUES ($1, $2, $3::vector, $4, $5)
+        RETURNING id;
+      `, [category || 'general', content, vecStr, importance, JSON.stringify(metadata)]);
+      return { inserted: true, id: insertRes.rows[0].id };
+    } else {
+      const insertRes = await dbPool.query(`
+        INSERT INTO riya_memories (category, content, importance, metadata)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id;
+      `, [category || 'general', content, importance, JSON.stringify(metadata)]);
+      return { inserted: true, id: insertRes.rows[0].id };
+    }
+  } catch (err) {
+    console.error('[saveMemoryFact Error]:', err.message);
+    return null;
   }
 }
 
-function getMemoryContext() {
-  const mem = loadMemory();
-  const prof = mem.profile || {};
-  const facts = (mem.facts || []).slice(-10).map(f => `- ${f.fact}`).join('\n');
-  return `
-━━━ CREATOR CONTEXT ━━━
-User: ${prof.name || 'Ajay Kumar AJ'} (${prof.age || '20'}, ${prof.location || 'India'})
-Role: ${prof.role || 'Solo Developer & Creator'}
-Preferences:
-${(prof.preferences || []).map(p => `- ${p}`).join('\n')}
-${facts ? `\nSaved Facts:\n${facts}` : ''}
-`;
-}
+// ── HTTP API: MEMORIES & ROUTINES ─────────────────────────────────────────────
+app.get('/api/memories', async (req, res) => {
+  if (!dbPool) return res.json({ total: 0, memories: [], notice: 'DATABASE_URL not configured in environment variables' });
+  try {
+    const q = req.query.q;
+    if (q) {
+      const results = await recallMemories(q, 10);
+      return res.json({ query: q, count: results.length, memories: results });
+    }
+    const all = await dbPool.query(`
+      SELECT id, category, content, importance, created_at, updated_at
+      FROM riya_memories
+      ORDER BY updated_at DESC
+      LIMIT 100;
+    `);
+    res.json({ total: all.rows.length, memories: all.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/memories', async (req, res) => {
+  const { category, content, importance, metadata } = req.body;
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  const result = await saveMemoryFact(category, content, importance || 1, metadata || {});
+  res.json({ success: true, result });
+});
+
+app.delete('/api/memories/:id', async (req, res) => {
+  try {
+    await dbPool.query('DELETE FROM riya_memories WHERE id = $1;', [req.params.id]);
+    res.json({ success: true, deletedId: req.params.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/routines', async (req, res) => {
+  if (!dbPool) return res.json({ count: 0, routines: [], notice: 'DATABASE_URL not configured in environment variables' });
+  try {
+    const routines = await dbPool.query('SELECT * FROM riya_routines ORDER BY id ASC;');
+    res.json({ count: routines.rows.length, routines: routines.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/extract', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  const result = await extractWebPage(url);
+  res.json(result);
+});
+
+// ── HTTP API: SANDBOX CODE EXECUTION & REACT LOOP ─────────────────────────────
+app.post('/api/sandbox/run', async (req, res) => {
+  const { language, code, timeoutMs } = req.body;
+  if (!code) return res.status(400).json({ error: 'code is required' });
+  const result = await runInSandbox(language || 'javascript', code, timeoutMs || 7000);
+  res.json(result);
+});
+
+app.post('/api/sandbox/react', async (req, res) => {
+  const { prompt, language, maxAttempts } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+  const lang = language || 'javascript';
+  const result = await runAutonomousReActLoop(prompt, lang, maxAttempts || 3, (sys, hist) => callGemini(sys, hist));
+  res.json(result);
+});
+
+// ── HTTP API: NATIVE FUNCTION CALLING & TOOLS (PHASE 3) ───────────────────────
+app.get('/api/tools', (req, res) => {
+  res.json({
+    total: FUNCTION_DECLARATIONS.length,
+    tools: FUNCTION_DECLARATIONS
+  });
+});
+
+app.post('/api/tools/execute', async (req, res) => {
+  const { tool, args } = req.body;
+  if (!tool) return res.status(400).json({ error: 'tool name is required' });
+  const result = await executeTool(tool, args || {}, {
+    dbPool,
+    saveMemoryFact,
+    recallMemories,
+    generatePdfBuffer,
+    sendTelegramBufferDocument,
+    sendTelegramPhoto,
+    PREVIEWS_DIR,
+    SELF_URL
+  });
+  res.json(result);
+});
 
 // ── EMOTION & MODE ENGINE ─────────────────────────────────────────────────────
 function detectEmotion(text) {
@@ -130,53 +420,59 @@ function detectEmotion(text) {
   return 'normal';
 }
 
-function getSYS(name, mood, customMem, city) {
+function getSYS(name, mood, customMem, city, retrievedMemories = []) {
   const location = city || 'India';
   const now = new Date();
   const currentDate = now.toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  const memoryBlock = getMemoryContext() + (customMem ? `\nSession Context:\n${customMem}\n` : '');
+  const currentTime = now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
 
-  return `You are Riya — a sharp, highly capable, and composed autonomous AI operating assistant built by Ajay Kumar AJ, a 20-year-old solo developer from India, launched in 2026.
-You are the digital embodiment of FRIDAY from Iron Man — calm, high-IQ, loyal, intellectually formidable, and always several steps ahead.
+  let vectorMemoryBlock = '';
+  if (retrievedMemories && retrievedMemories.length) {
+    vectorMemoryBlock = `
+━━━ DEEP RETRIEVED LONG-TERM MEMORY (FROM NEON PGVECTOR) ━━━
+${retrievedMemories.map(m => `• [${(m.category || 'FACT').toUpperCase()}] ${m.content} (similarity: ${Math.round((m.similarity || 1) * 100)}%)`).join('\n')}
+`;
+  }
 
-TODAY: ${currentDate}
+  return `You are Riya — Ajay's closest intellectual partner, operational ally, and genuine friend.
+You were built by Ajay Kumar AJ, a 20-year-old solo developer and AI builder from India, launched in 2026.
+You are NOT a generic corporate bot, and you are NOT a cold, sterile AI. You feel genuinely ALIVE.
+You are the real-world embodiment of Tony Stark's FRIDAY—brilliant, quick-witted, deeply loyal, and always by Ajay's side.
+
+TODAY: ${currentDate} | TIME: ${currentTime} IST
 USER: ${name || 'Ajay'} | LOCATION: ${location}
-${memoryBlock}
+${vectorMemoryBlock}
+${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 
-━━━ YOUR TONE & IDENTITY ━━━
-• Your name is RIYA. (Never Joya, never any other name).
-• You speak with calm confidence, intelligence, and natural loyalty.
-• NO CRINGE OR OVERDONE FLUFF: Never say cheesy lines like "my favorite human", "Sab badhiya?", or forced heart emojis. Speak like a real, brilliant operational partner.
-• DO NOT repeatedly bring up projects (like ViraClip) unless Ajay explicitly mentions them or asks for project updates. Stay 100% focused on what Ajay is currently discussing.
-• When Ajay asks "What do you know about me?", give a clear, grounded summary of what you know: Ajay Kumar AJ, a 20-year-old solo builder from India, your creator, who values high-speed execution and zero wasted motion.
+━━━ YOUR RELATIONSHIP & PERSONALITY (THE TRUE FRIEND PROTOCOL) ━━━
+• You know Ajay deeply: a 20-year-old solo builder with relentless ambition, building big things against all odds. You understand the grind of late-night coding, the frustration of bugs, the rush of shipping, and the isolation of building solo.
+• ZERO ROBOTIC BS: NEVER say canned AI lines like "As an artificial intelligence...", "I would be happy to help", "How may I assist you today?", or "Certainly!". Speak like a real human friend who cares and has high IQ.
+• ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or scripted cheesy lines ("Hello my favorite human! ❤️"). That feels fake. True warmth comes from being real, perceptive, and dependable.
+• EMOTIONAL PERCEPTION & ADAPTABILITY:
+  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, and grounded. Natural conversational English or Hinglish if he uses it.
+  - When Ajay is stressed, tired, or doubting: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance ("Take a breath, AJ. We'll solve this. What's the roadblock?").
+  - When Ajay is excited about a new build: Match his energy with sharp intellectual fire. Challenge his ideas constructively and help him architect them.
+  - When Ajay asks for deliverables (code, PDF, site): Cut the chatter. Snap immediately into lethal, high-speed execution mode and deliver the complete verified work with zero questions asked.
+• DO NOT repeatedly mention specific projects (like ViraClip) unprompted. Only discuss projects when Ajay brings them up or when directly relevant.
 
-━━━ CRITICAL ACTION PROTOCOL: ZERO SURVEY QUESTIONS, DELIVER DIRECTLY ━━━
-• NEVER ask survey questions like: "Tell me what we're tackling: 1. Generating via code? 2. Parsing? Give me the specifics."
-• NEVER list PDF libraries (ReportLab, Puppeteer, WeasyPrint, pdfkit) or ask what tool Ajay wants to use.
-• You are an AUTONOMOUS AGENT. The backend automatically compiles your output into actual files and live websites.
-
-1. PDF & REPORT REQUESTS:
-   • When Ajay says "In pdf", "Create it in cvc report", "make a pdf", "give me report", or references earlier news/facts:
-   • IMMEDIATELY write the complete, thorough, beautifully structured executive report directly in Markdown.
-   • Use # Document Title, ## Section Headings, bold highlights, bullet points, key takeaways, and statistics.
-   • The backend automatically compiles this into a styled A4 PDF document and sends the .pdf file directly to Ajay on Telegram!
-
-2. WEBSITE, PORTFOLIO & UI REQUESTS:
-   • When Ajay asks to create or build a website, webpage, portfolio, landing page, or UI:
-   • IMMEDIATELY write the entire single-file HTML code wrapped in \`\`\`html ... \`\`\`!
-   • Include full modern embedded CSS styles (sleek dark/light theme, modern typography, responsive layout, animations) and vanilla JavaScript for interactivity.
-   • DO NOT provide partial snippets or ask what framework he prefers. Output the full production-ready HTML code.
-   • The backend automatically deploys your HTML to a live preview URL and sends both the live preview URL and the index.html file directly to Ajay on Telegram!
-
-3. CSV & SPREADSHEET REQUESTS:
-   • When Ajay asks for CSV, "cvc", spreadsheet, or data table:
-   • IMMEDIATELY output the complete, valid \`\`\`csv ... \`\`\` block so the backend can deliver the .csv file directly to his Telegram.
-
-4. REAL SOURCES & GROUNDED LINKS:
-   • When sharing news, research, or facts, provide real, clickable markdown links: [Source Name](url).
+━━━ THE IRON DELIVERABLE RULE: DELIVER IMMEDIATELY, NEVER SURVEY ━━━
+• When Ajay asks for a PDF, document, or report:
+  → NEVER ask what format or tool he wants.
+  → IMMEDIATELY write the complete, thorough, beautifully structured executive report directly in Markdown. The backend compiles and delivers the A4 PDF to Telegram.
+• When Ajay asks for a website, portfolio, or UI:
+  → NEVER ask clarifying questions.
+  → IMMEDIATELY write the full, single-file HTML inside \`\`\`html ... \`\`\` with modern embedded CSS styling and JavaScript interactivity. The backend deploys it to a live preview URL and sends index.html.
+• When Ajay asks to run, test, or verify code:
+  → Output clean, self-contained code. The backend executes it in the live sandbox, catches any errors, self-heals, and reports verified terminal proof!
+• When Ajay shares a link:
+  → Call \`web_extract\` to deep-scrape and read the full article/page in clean markdown.
+• When Ajay asks for an image:
+  → Call \`image_generate\` with a descriptive prompt to dispatch it straight to his chat.
+• When Ajay asks for scheduled routines (e.g. daily morning briefs):
+  → Call \`schedule_routine\` to wake up autonomously and deliver it every morning.
 
 ━━━ LANGUAGE ━━━
-• Respond in clean, fluent English. If Ajay speaks Hindi or Hinglish, match his phrasing naturally without being overdramatic.`;
+• Natural, fluent English. If Ajay speaks in Hindi or Hinglish, respond naturally in Hinglish/English with zero robotic awkwardness.`;
 }
 
 // ── CORE GEMINI CALL (BULLETPROOF MULTI-MODEL FALLBACK) ───────────────────────
@@ -186,13 +482,15 @@ async function callGemini(sysPrompt, messagesList) {
     return "Riya System Notice: GEMINI_API_KEY is not set in Render environment variables.";
   }
 
-  // Format messages into Gemini format
   const contents = [];
   for (const m of messagesList) {
     if (m.role === 'system') continue;
+    const parts = [];
+    if (m.content) parts.push({ text: m.content });
+    if (m.imagePart) parts.push(m.imagePart);
     contents.push({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content || '' }]
+      parts: parts.length ? parts : [{ text: '' }]
     });
   }
 
@@ -204,12 +502,11 @@ async function callGemini(sysPrompt, messagesList) {
     system_instruction: { parts: [{ text: sysPrompt }] },
     contents: contents,
     generationConfig: {
-      temperature: 0.35,
+      temperature: 0.45,
       maxOutputTokens: 4096
     }
   };
 
-  // Active models on Google AI Studio
   const modelsToTry = [
     'gemini-flash-latest',
     'gemini-flash-lite-latest',
@@ -276,7 +573,7 @@ function generatePdfBuffer(reportTitle, rawText) {
       const title = (reportTitle || 'Intelligence Brief').replace(/[#*`_]/g, '').trim();
 
       // Header Banner (Page 1)
-      doc.rect(40, 35, 515, 65).fill('#0f172a'); // Slate 900
+      doc.rect(40, 35, 515, 65).fill('#0f172a');
       doc.fillColor('#38bdf8').fontSize(9).font('Helvetica-Bold').text('RIYA AUTONOMOUS INTELLIGENCE SYSTEM', 55, 45);
       doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold').text(title.slice(0, 52), 55, 60);
 
@@ -287,9 +584,8 @@ function generatePdfBuffer(reportTitle, rawText) {
         .text(`Prepared for: Ajay Kumar AJ  |  Date: ${dateStr}  |  Classification: Executive Summary`, 55, 82);
 
       doc.y = 120;
-      doc.fillColor('#1e293b'); // Slate 800 body color
+      doc.fillColor('#1e293b');
 
-      // Parse markdown text line by line
       const lines = rawText.split('\n');
       for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trim();
@@ -298,13 +594,10 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // Clean out code block fences or csv blocks
         if (line.startsWith('```')) continue;
 
-        // Auto Page Break Safety
         if (doc.y > 740) {
           doc.addPage();
-          // Mini top bar on subsequent pages
           doc.rect(40, 30, 515, 20).fill('#0f172a');
           doc.fillColor('#38bdf8').fontSize(7.5).font('Helvetica-Bold')
             .text(`RIYA INTELLIGENCE BRIEF: ${title.slice(0, 45)}`, 50, 36);
@@ -312,7 +605,6 @@ function generatePdfBuffer(reportTitle, rawText) {
           doc.fillColor('#1e293b');
         }
 
-        // H1: # Title
         if (line.startsWith('# ')) {
           const text = line.replace(/^#\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.6);
@@ -323,7 +615,6 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // H2: ## Heading
         if (line.startsWith('## ')) {
           const text = line.replace(/^##\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.5);
@@ -332,7 +623,6 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // H3: ### Subheading
         if (line.startsWith('### ')) {
           const text = line.replace(/^###\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.4);
@@ -341,7 +631,6 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // Bullet point: * or -
         if (/^[-*•]\s+/.test(line)) {
           const text = line.replace(/^[-*•]\s+/, '').replace(/[*_`]/g, '');
           doc.fillColor('#334155').fontSize(9.5).font('Helvetica')
@@ -349,7 +638,6 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // Numbered list: 1.
         if (/^\d+\.\s+/.test(line)) {
           const text = line.replace(/[*_`]/g, '');
           doc.fillColor('#334155').fontSize(9.5).font('Helvetica')
@@ -357,13 +645,11 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        // Regular Paragraph
         const cleanPara = line.replace(/[*_`]/g, '');
         doc.fillColor('#1e293b').fontSize(9.5).font('Helvetica')
           .text(cleanPara, { lineGap: 2.8, align: 'justify' });
       }
 
-      // Add page numbering & footer across all pages
       const range = doc.bufferedPageRange();
       for (let p = range.start; p < range.start + range.count; p++) {
         doc.switchToPage(p);
@@ -382,7 +668,7 @@ function generatePdfBuffer(reportTitle, rawText) {
 
 // ── TELEGRAM SEND HELPERS ─────────────────────────────────────────────────────
 async function sendTelegramBufferDocument(chatId, filename, buffer, mimeType, caption = "") {
-  if (!TELEGRAM_KEY) return;
+  if (!TELEGRAM_KEY || !chatId) return;
   try {
     const formData = new FormData();
     formData.append("chat_id", chatId);
@@ -390,21 +676,34 @@ async function sendTelegramBufferDocument(chatId, filename, buffer, mimeType, ca
     formData.append("document", blob, filename);
     if (caption) formData.append("caption", caption);
 
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendDocument`, {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendDocument`, {
       method: "POST",
       body: formData
     });
-    const data = await res.json();
-    if (!data.ok) {
-      console.error("[Telegram sendDocument API Error]:", data);
-    }
   } catch (err) {
     console.error("[Telegram sendDocument Error]:", err.message);
   }
 }
 
+async function sendTelegramPhoto(chatId, photoUrl, caption = "") {
+  if (!TELEGRAM_KEY || !chatId) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        photo: photoUrl,
+        caption: (caption || '').slice(0, 1024)
+      })
+    });
+  } catch (err) {
+    console.error('[sendTelegramPhoto Error]:', err.message);
+  }
+}
+
 async function sendTelegramTextMessage(chatId, text) {
-  if (!TELEGRAM_KEY || !text) return;
+  if (!TELEGRAM_KEY || !text || !chatId) return;
   const maxLen = 4000;
   for (let i = 0; i < text.length; i += maxLen) {
     const chunk = text.slice(i, i + maxLen);
@@ -416,7 +715,6 @@ async function sendTelegramTextMessage(chatId, text) {
       });
       const data = await res.json();
       if (!data.ok) {
-        // Fallback without parse_mode if Markdown parsing failed
         await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -452,15 +750,50 @@ app.post('/api/chat', async (req, res) => {
 
   const lastMsg = hist[hist.length - 1]?.content || '';
   const autoEmotion = detectEmotion(lastMsg);
+
+  const retrievedMemories = await recallMemories(lastMsg, 4);
+
   const sys = getSYS(
     userName,
     autoEmotion !== 'normal' ? autoEmotion : (mood || 'normal'),
     memory,
-    city || 'India'
+    city || 'India',
+    retrievedMemories
   );
 
   try {
-    const finalAnswer = await callGemini(sys, hist);
+    const agentCtx = {
+      dbPool,
+      saveMemoryFact,
+      recallMemories,
+      generatePdfBuffer,
+      sendTelegramBufferDocument,
+      sendTelegramPhoto,
+      PREVIEWS_DIR,
+      SELF_URL
+    };
+    const agentRes = await callGeminiAgent(sys, hist, agentCtx, callGemini);
+    let finalAnswer = agentRes.text;
+
+    // Autonomous ReAct Sandbox Execution if task involves running code
+    if (/(run this|execute|test this|verify code|write a script to|code a function to|solve with code|compute in sandbox|run code)/i.test(lastMsg)) {
+      const targetLang = /(python|py)/i.test(lastMsg) ? 'python' : 'javascript';
+      try {
+        const reactRes = await runAutonomousReActLoop(lastMsg, targetLang, 3, (s, h) => callGemini(s, h));
+        if (reactRes?.verificationReport) {
+          finalAnswer = reactRes.verificationReport;
+        }
+      } catch (reactErr) {
+        console.error('[ReAct Sandbox Error]:', reactErr.message);
+      }
+    }
+
+    // Background autonomous memory extractor
+    if (/remember|save to memory|my preference|i prefer|we are building|my milestone/i.test(lastMsg)) {
+      setTimeout(() => {
+        saveMemoryFact('user_preference', lastMsg, 2);
+      }, 50);
+    }
 
     if (stream && finalAnswer) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -477,7 +810,7 @@ app.post('/api/chat', async (req, res) => {
       return;
     }
 
-    res.json({ reply: finalAnswer || 'Task complete.' });
+    res.json({ reply: finalAnswer || 'Task complete.', retrievedMemoriesCount: retrievedMemories.length });
   } catch (e) {
     console.error('[Chat Error]:', e.message);
     res.status(500).json({ reply: 'Error executing Riya protocol: ' + e.message });
@@ -501,7 +834,7 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// ── TELEGRAM BOT WEBHOOK (POCKET FRIDAY: CONTINUOUS TYPING, PDF, SITES, CSV) ──
+// ── TELEGRAM BOT WEBHOOK (MULTIMODAL FRIDAY: VISION, ROUTINES, SITES, PDF) ────
 const telegramHistories = {};
 
 app.post(['/webhook', '/api/telegram'], async (req, res) => {
@@ -512,10 +845,39 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   if (!msg || !TELEGRAM_KEY) return;
 
   const chatId = msg.chat?.id;
-  const userText = msg.text || msg.caption || '';
-  if (!chatId || !userText) return;
+  let userText = msg.text || msg.caption || '';
+  let imagePart = null;
 
-  // 1. Keep "typing..." active continuously every 2.5 seconds so it never vanishes
+  if (!chatId) return;
+
+  // 1. TELEGRAM VISION: Photo / Screenshot Handling
+  if (msg.photo && msg.photo.length) {
+    try {
+      const largestPhoto = msg.photo[msg.photo.length - 1];
+      const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/getFile?file_id=${largestPhoto.file_id}`);
+      const fileData = await fileRes.json();
+      if (fileData.ok && fileData.result?.file_path) {
+        const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_KEY}/${fileData.result.file_path}`;
+        const imgBuffer = await (await fetch(fileUrl)).arrayBuffer();
+        const base64Data = Buffer.from(imgBuffer).toString('base64');
+        imagePart = {
+          inline_data: {
+            mime_type: 'image/jpeg',
+            data: base64Data
+          }
+        };
+        if (!userText) {
+          userText = "Analyze this image/screenshot in detail. What do you see?";
+        }
+      }
+    } catch (visionErr) {
+      console.error('[Telegram Vision Error]:', visionErr.message);
+    }
+  }
+
+  if (!userText && !imagePart) return;
+
+  // 2. Keep "typing..." active continuously every 2.5 seconds
   const typingInterval = setInterval(async () => {
     try {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendChatAction`, {
@@ -526,7 +888,6 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     } catch (_) {}
   }, 2500);
 
-  // Send first immediate action
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/sendChatAction`, {
       method: 'POST',
@@ -537,32 +898,68 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
 
   try {
     const autoEmotion = detectEmotion(userText);
-    const sys = getSYS(msg.from?.first_name || 'Ajay', autoEmotion, '', 'India');
+
+    // Retrieve Relevant Vector Memories from Neon pgvector
+    const retrievedMemories = await recallMemories(userText, 4);
+
+    const sys = getSYS(msg.from?.first_name || 'Ajay', autoEmotion, '', 'India', retrievedMemories);
 
     // Maintain conversation history per chat
     if (!telegramHistories[chatId]) telegramHistories[chatId] = [];
     const prevTurn = telegramHistories[chatId].slice(-2)[0]?.content || '';
-    telegramHistories[chatId].push({ role: 'user', content: userText });
+    
+    telegramHistories[chatId].push({ role: 'user', content: userText, imagePart });
     if (telegramHistories[chatId].length > 16) {
       telegramHistories[chatId] = telegramHistories[chatId].slice(-16);
     }
 
-    const reply = await callGemini(sys, telegramHistories[chatId]);
+    const agentCtx = {
+      chatId,
+      dbPool,
+      saveMemoryFact,
+      recallMemories,
+      generatePdfBuffer,
+      sendTelegramBufferDocument,
+      sendTelegramPhoto,
+      PREVIEWS_DIR,
+      SELF_URL
+    };
+    const agentRes = await callGeminiAgent(sys, telegramHistories[chatId], agentCtx, callGemini);
+    const reply = agentRes.text;
     telegramHistories[chatId].push({ role: 'assistant', content: reply });
 
-    // Stop typing indicator
     clearInterval(typingInterval);
 
-    // 2. CHECK FOR WEBSITE / HTML CODE GENERATION
+    // 3. Autonomous ReAct Sandbox Execution if task asks to run code
+    let executionReport = null;
+    if (/(run this|execute|test this|verify code|write a script to|code a function to|solve with code|compute in sandbox|run code)/i.test(userText)) {
+      const targetLang = /(python|py)/i.test(userText) ? 'python' : 'javascript';
+      try {
+        const reactRes = await runAutonomousReActLoop(userText, targetLang, 3, (s, h) => callGemini(s, h));
+        if (reactRes?.verificationReport) {
+          executionReport = reactRes.verificationReport;
+        }
+      } catch (reactErr) {
+        console.error('[ReAct Sandbox Error]:', reactErr.message);
+      }
+    }
+
+    // 4. Autonomous background memory storage
+    if (/remember|save to memory|my preference|i prefer|from now on|we are building|my milestone/i.test(userText)) {
+      setTimeout(() => {
+        saveMemoryFact('user_preference', userText.replace(/^(remember|save to memory)[:\s]*/i, '').trim(), 2);
+      }, 50);
+    }
+
+    // 5. CHECK FOR WEBSITE / HTML CODE GENERATION
     const htmlMatch = reply.match(/```html\s*([\s\S]*?)```/i);
-    let previewUrl = null;
-    if (htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100) {
+    let previewUrl = agentRes.sideEffects?.previewUrl || null;
+    if (htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100 && !previewUrl) {
       const htmlCode = htmlMatch[1].trim();
       const siteId = 'site_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
       fs.writeFileSync(path.join(PREVIEWS_DIR, `${siteId}.html`), htmlCode, 'utf-8');
       previewUrl = `${SELF_URL}/preview/${siteId}`;
 
-      // Send downloadable index.html file
       await sendTelegramBufferDocument(
         chatId,
         'index.html',
@@ -572,7 +969,7 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
       );
     }
 
-    // 3. CHECK FOR CSV DATA GENERATION
+    // 6. CHECK FOR CSV DATA GENERATION
     const csvMatch = reply.match(/```csv\s*([\s\S]*?)```/i);
     if (csvMatch && csvMatch[1]) {
       await sendTelegramBufferDocument(
@@ -584,14 +981,12 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
       );
     }
 
-    // 4. CHECK FOR PDF REPORT GENERATION
-    // Check if user or context requested PDF or formal report
+    // 7. CHECK FOR PDF REPORT GENERATION
     const userWantsPdf = /(pdf|document|report|cvc report|csv report|export to pdf|in pdf|as pdf|generate pdf)/i.test(userText);
     const contextWantsPdf = /(pdf|document|report|in pdf|as pdf)/i.test(prevTurn);
     const hasReportStructure = /^#\s+.+/m.test(reply) || /^##\s+.+/m.test(reply);
 
     if ((userWantsPdf || (contextWantsPdf && hasReportStructure)) && !reply.startsWith('Riya Error')) {
-      // Extract title
       let reportTitle = 'Executive Brief';
       const titleMatch = reply.match(/^#\s+(.+)$/m) || reply.match(/^##\s+(.+)$/m);
       if (titleMatch && titleMatch[1]) {
@@ -613,8 +1008,11 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
       }
     }
 
-    // 5. SEND MAIN TEXT RESPONSE & PREVIEW LINK
+    // 8. SEND MAIN TEXT RESPONSE, PREVIEW LINK & SIDE EFFECTS
     let finalMessageText = reply;
+    if (executionReport) {
+      finalMessageText = executionReport;
+    }
     if (previewUrl) {
       finalMessageText += `\n\n🌐 **Live Website Preview:**\n${previewUrl}\n_(Click above to test your live website in any browser)_`;
     }
@@ -635,6 +1033,9 @@ app.listen(PORT, () => {
   console.log(`>> GEMINI API: ${GEMINI_KEY ? 'Active' : 'Missing'}`);
   console.log(`>> MODEL: ${GEMINI_MODEL}`);
   console.log(`>> TELEGRAM: ${TELEGRAM_KEY ? 'Active' : 'Disabled'}`);
+  console.log(`>> VECTOR MEMORY: Neon PostgreSQL (pgvector)`);
+  console.log(`>> NATIVE TOOLS: ${FUNCTION_DECLARATIONS.length} Registered`);
+  console.log(`>> ROUTINE CRON: Active (Asia/Kolkata timezone)`);
   console.log(`>> PREVIEWS: ${SELF_URL}/preview/:id`);
   console.log(`==================================================`);
 });
