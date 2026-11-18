@@ -543,16 +543,23 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
       { function_declarations: FUNCTION_DECLARATIONS }
     ],
     generationConfig: {
-      temperature: 0.45,
-      maxOutputTokens: 4096
+      temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.4'),
+      topP: parseFloat(process.env.GEMINI_TOP_P || '0.95'),
+      topK: parseInt(process.env.GEMINI_TOP_K || '40', 10),
+      maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '8192', 10)
     }
   };
 
   const modelsToTry = [
-    process.env.GEMINI_MODEL || 'gemini-flash-latest',
-    'gemini-flash-lite-latest',
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
+    'gemini-flash-latest',
+    'gemini-1.5-flash-latest',
+    'gemini-2.0-flash-exp',
+    'gemini-1.5-pro-latest',
+    'gemini-2.5-flash',
     'gemini-2.5-pro'
-  ];
+  ].filter(Boolean);
 
   let turns = 0;
   const maxTurns = 5;

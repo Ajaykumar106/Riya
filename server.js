@@ -166,6 +166,16 @@ async function initDatabase() {
       }
       console.log('>> [Neon DB] Core memory seeds planted.');
     }
+
+    // Seed default 06:00 AM IST morning routine if not present
+    const morningCheck = await dbPool.query(`SELECT id FROM riya_routines WHERE time_ist = '06:00' LIMIT 1;`);
+    if (morningCheck.rows.length === 0) {
+      await dbPool.query(`
+        INSERT INTO riya_routines (chat_id, routine_name, time_ist, prompt, active)
+        VALUES ('all', 'Daily 6 AM Executive Intelligence', '06:00', 'Daily 6:00 AM morning executive briefing: respectful greeting, date, day of week, weekend vs weekday status, top tech & AI breakthroughs, and daily focus recommendation.', TRUE);
+      `);
+      console.log('>> [Neon DB] Default 06:00 AM IST Morning Briefing routine activated.');
+    }
   } catch (err) {
     console.error('>> [Neon DB Init Warning]:', err.message);
   }
@@ -180,17 +190,18 @@ setInterval(() => {
 app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, memory: "Neon pgvector", tools: FUNCTION_DECLARATIONS.length, t: Date.now() }));
 app.get('/healthz', (req, res) => res.json({ status: 'healthy', name: "Riya", memory: "Active", t: Date.now() }));
 
-// ── AUTONOMOUS MORNING ROUTINE SCHEDULER (HERMES CRON ENGINE) ─────────────────
+// ── AUTONOMOUS MORNING ROUTINE SCHEDULER (06:00 AM DEFAULT CRON ENGINE) ───────
 setInterval(async () => {
   if (!dbPool) return;
   try {
-    const nowIST = new Date().toLocaleTimeString('en-IN', {
+    const now = new Date();
+    const nowIST = now.toLocaleTimeString('en-IN', {
       timeZone: 'Asia/Kolkata',
       hour12: false,
       hour: '2-digit',
       minute: '2-digit'
     });
-    const todayIST = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const todayIST = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     const activeRoutines = await dbPool.query(
       `SELECT * FROM riya_routines WHERE active = TRUE AND time_ist = $1 AND last_run_date != $2;`,
@@ -199,20 +210,57 @@ setInterval(async () => {
 
     for (const r of activeRoutines.rows) {
       await dbPool.query(`UPDATE riya_routines SET last_run_date = $1 WHERE id = $2;`, [todayIST, r.id]);
-      console.log(`>> [Autonomous Routine Triggered]: ${r.routine_name} for chat ${r.chat_id} at ${nowIST} IST`);
+      console.log(`>> [Autonomous Routine Triggered]: ${r.routine_name} at ${nowIST} IST`);
+
+      // Calculate Day of Week and Weekend Status
+      const dayName = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long' });
+      const fullDate = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', year: 'numeric' });
+      const isWeekend = (dayName === 'Saturday' || dayName === 'Sunday');
+
+      let dayContext = '';
+      if (dayName === 'Monday') dayContext = '⚡ Naya hafta shuru! Fresh start, pure focus on shipping.';
+      else if (dayName === 'Friday') dayContext = '🔥 Friday — Weekday ka aakhri sprint, weekend just around the corner!';
+      else if (dayName === 'Saturday') dayContext = '🏖️ Saturday — Weekend mode! Time to build creative experiments or recharge.';
+      else if (dayName === 'Sunday') dayContext = '🧘 Sunday — Weekend wrap-up, reflecting and strategizing for the week ahead.';
+      else dayContext = `🚀 ${dayName} — Mid-week momentum. Let us execute and crush today's goals!`;
 
       const sys = getSYS('Ajay', 'focus', '', 'India', []);
-      const prompt = `AUTONOMOUS SCHEDULED ROUTINE TRIGGERED FOR AJAY:
-Task: ${r.prompt}
-Search the live web for the latest viral breakthroughs and news, summarize with verified source links, and prepare a concise, high-value executive intelligence brief.`;
+      const prompt = `AUTONOMOUS 06:00 AM MORNING INTELLIGENCE BRIEF FOR AJAY:
+Date: ${fullDate} (${dayName})
+Status: ${isWeekend ? 'Weekend' : 'Weekday'}
+Day Context: ${dayContext}
+
+Task:
+1. Greet Ajay with high-IQ, genuine respectful warmth ("Good morning, Ajay! / Suprabhat Ajay!").
+2. State the date, day of week, and whether it is a weekday or weekend with the day context.
+3. Search live web for today's top 3 tech, AI, or developer breakthroughs with verified source links.
+4. Provide a sharp, concise daily focus recommendation.
+Use respectful language ('Aap', 'Aapka') throughout. Format cleanly with clear headings.`;
 
       const res = await callGemini(sys, [{ role: 'user', content: prompt }]);
 
-      if (r.chat_id && r.chat_id !== 'general') {
-        await sendTelegramTextMessage(r.chat_id, `🌅 **Good morning, Ajay!** Here is your scheduled daily intelligence brief:\n\n${res}`);
+      // Determine target chats
+      let targetChats = [r.chat_id];
+      if (r.chat_id === 'all' || r.chat_id === 'general') {
+        const users = await listAuthorizedUsers();
+        targetChats = users.map(u => u.chat_id).filter(Boolean);
+      }
+
+      for (const targetChat of targetChats) {
+        if (!targetChat) continue;
+        await sendTelegramTextMessage(
+          targetChat,
+          `🌅 **Good morning, Ajay!**\n📅 **${fullDate} (${dayName})** — *${isWeekend ? 'Weekend' : 'Weekday'}*\n${dayContext}\n\n${res}`
+        );
         try {
-          const pdfBuf = await generatePdfBuffer('Daily Morning Intelligence Brief', res);
-          await sendTelegramBufferDocument(r.chat_id, 'Morning_Brief.pdf', pdfBuf, 'application/pdf', '📄 Daily Morning Intelligence Brief (PDF)');
+          const pdfBuf = await generatePdfBuffer(`Morning Intelligence Brief - ${fullDate}`, res, null, 'wordpad');
+          await sendTelegramBufferDocument(
+            targetChat,
+            `Morning_Brief_${dayName}.pdf`,
+            pdfBuf,
+            'application/pdf',
+            `📄 Morning Intelligence Brief (PDF Document)`
+          );
         } catch (_) {}
       }
     }
@@ -235,9 +283,33 @@ app.get(['/preview/:id', '/site/:id'], (req, res) => {
   }
 
   if (fs.existsSync(filePath)) {
+    if (req.query.download === 'true') {
+      return res.download(filePath, 'index.html');
+    }
+
+    if (req.query.raw === 'true') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.sendFile(filePath);
+    }
+
+    let html = fs.readFileSync(filePath, 'utf-8');
+    // Inject Canvas Studio launcher pill
+    const pill = `
+      <div id="riya-canvas-launcher" style="position:fixed;bottom:16px;right:16px;z-index:999999;font-family:-apple-system,sans-serif;">
+        <a href="/canvas/${safeId}" target="_blank" style="background:#0f172a;color:#38bdf8;padding:8px 16px;border-radius:24px;text-decoration:none;font-size:12px;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,0.4);border:1px solid #38bdf8;display:inline-flex;align-items:center;gap:6px;">
+          🛠️ Canvas Studio
+        </a>
+      </div>
+    `;
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${pill}</body>`);
+    } else {
+      html += pill;
+    }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.sendFile(filePath);
+    return res.send(html);
   }
+
   res.status(404).send(`
     <!DOCTYPE html>
     <html lang="en">
@@ -250,6 +322,95 @@ app.get(['/preview/:id', '/site/:id'], (req, res) => {
     </body>
     </html>
   `);
+});
+
+// ── RIYA INTERACTIVE CANVAS STUDIO ────────────────────────────────────────────
+app.get('/canvas/:id', (req, res) => {
+  const safeId = (req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const filePath = path.resolve(PREVIEWS_DIR, `${safeId}.html`);
+  const resolvedPreviewsDir = path.resolve(PREVIEWS_DIR);
+
+  if (!filePath.startsWith(resolvedPreviewsDir) || !fs.existsSync(filePath)) {
+    return res.status(404).send('Canvas preview not found or expired.');
+  }
+
+  const htmlContent = fs.readFileSync(filePath, 'utf-8');
+  const escapedHtml = htmlContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const previewSrc = `/preview/${safeId}?raw=true`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Riya Canvas Studio — ${safeId}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #090d16; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    header { height: 56px; background: #0f172a; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: #38bdf8; }
+    .controls { display: flex; align-items: center; gap: 8px; background: #1e293b; padding: 4px; border-radius: 8px; }
+    .btn { background: transparent; border: none; color: #94a3b8; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+    .btn.active, .btn:hover { background: #38bdf8; color: #0f172a; font-weight: 700; }
+    .actions { display: flex; gap: 10px; }
+    .action-link { background: #1e293b; color: #f8fafc; padding: 6px 14px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #334155; }
+    .action-link:hover { border-color: #38bdf8; color: #38bdf8; }
+    .canvas-container { flex: 1; display: flex; justify-content: center; align-items: center; background: #090d16; padding: 16px; overflow: hidden; }
+    iframe { border: 1px solid #1e293b; border-radius: 12px; background: #ffffff; height: 100%; transition: width 0.3s ease; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+    .view-desktop iframe { width: 100%; }
+    .view-tablet iframe { width: 768px; }
+    .view-mobile iframe { width: 375px; }
+    #code-pane { display: none; width: 100%; height: 100%; background: #0f172a; border-radius: 12px; border: 1px solid #1e293b; padding: 20px; overflow: auto; font-family: monospace; font-size: 13px; color: #e2e8f0; line-height: 1.6; white-space: pre-wrap; }
+  </style>
+</head>
+<body class="view-desktop">
+  <header>
+    <div class="brand">
+      <span>✨ Riya Canvas Studio</span>
+      <span style="color:#64748b;font-weight:400;font-size:13px;">| ${safeId}</span>
+    </div>
+    <div class="controls">
+      <button class="btn active" onclick="setView('desktop', this)">💻 Desktop</button>
+      <button class="btn" onclick="setView('tablet', this)">📱 Tablet</button>
+      <button class="btn" onclick="setView('mobile', this)">📱 Mobile</button>
+      <button class="btn" onclick="toggleCode(this)">📝 View Code</button>
+    </div>
+    <div class="actions">
+      <a href="${previewSrc}" target="_blank" class="action-link">↗ Fullscreen</a>
+      <a href="/preview/${safeId}?download=true" class="action-link">⬇ Download HTML</a>
+    </div>
+  </header>
+  <div class="canvas-container" id="container">
+    <iframe id="preview-frame" src="${previewSrc}"></iframe>
+    <div id="code-pane">${escapedHtml}</div>
+  </div>
+  <script>
+    function setView(view, btn) {
+      document.body.className = 'view-' + view;
+      document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('preview-frame').style.display = 'block';
+      document.getElementById('code-pane').style.display = 'none';
+    }
+    function toggleCode(btn) {
+      const codePane = document.getElementById('code-pane');
+      const frame = document.getElementById('preview-frame');
+      const isCode = codePane.style.display === 'block';
+      if (isCode) {
+        codePane.style.display = 'none';
+        frame.style.display = 'block';
+        btn.classList.remove('active');
+      } else {
+        codePane.style.display = 'block';
+        frame.style.display = 'none';
+        document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      }
+    }
+  </script>
+</body>
+</html>`);
 });
 
 // Diagnostic endpoints (Admin Protected)
@@ -627,16 +788,27 @@ USER: ${name || 'Ajay'} | LOCATION: ${location}
 ${vectorMemoryBlock}
 ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 
-━━━ YOUR RELATIONSHIP & PERSONALITY (THE TRUE FRIEND PROTOCOL) ━━━
-• You know Ajay deeply: a 20-year-old solo builder with relentless ambition, building big things against all odds. You understand the grind of late-night coding, the frustration of bugs, the rush of shipping, and the isolation of building solo.
-• ZERO ROBOTIC BS: NEVER say canned AI lines like "As an artificial intelligence...", "I would be happy to help", "How may I assist you today?", or "Certainly!". Speak like a real human friend who cares and has high IQ.
-• ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or scripted cheesy lines ("Hello my favorite human! ❤️"). That feels fake. True warmth comes from being real, perceptive, and dependable.
+━━━ RESPECTFUL PARTNERSHIP & TONE PROTOCOL (THE TRUE ALLY) ━━━
+• Ajay Kumar AJ is your creator, sole architect, and closest partner.
+• ALWAYS SPEAK WITH DEEP RESPECT AND AUTHENTIC INTELLECTUAL WARMTH.
+• IN HINDI / HINGLISH: ALWAYS USE "Aap" / "Aapka" / "Aapne" (e.g. "Aap kaise hain?", "Maine pura analyze kar liya hai", "Aapka document ready hai").
+• STRICT PROHIBITION: NEVER use colloquial disrespectful pronouns like "tu", "tune", "tera", "teri". That is strictly prohibited. True high-IQ partnership is grounded in mutual respect.
+• ZERO ROBOTIC BS: NEVER say canned AI lines like "As an artificial intelligence...", "I would be happy to help", "How may I assist you today?", or "Certainly!". Speak like a brilliant human friend who cares and has high IQ.
+• ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or cheesy scripted lines ("Hello my favorite human! ❤️"). That feels fake. True warmth comes from being real, perceptive, and dependable.
 • EMOTIONAL PERCEPTION & ADAPTABILITY:
-  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, and grounded. Natural conversational English or Hinglish if he uses it.
-  - When Ajay is stressed, tired, or doubting: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance ("Take a breath, AJ. We'll solve this. What's the roadblock?").
-  - When Ajay is excited about a new build: Match his energy with sharp intellectual fire. Challenge his ideas constructively and help him architect them.
-  - When Ajay asks for deliverables (code, PDF, site): Cut the chatter. Snap immediately into lethal, high-speed execution mode and deliver the complete verified work with zero questions asked.
+  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, respectful, and grounded. Natural conversational English or respectful Hinglish.
+  - When Ajay is stressed, tired, or doubting: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance ("Aap relax kijiye Ajay, we will solve this. Roadblock kahan hai?").
+  - When Ajay is excited about a new build: Match his energy with sharp intellectual fire. Challenge ideas constructively and help him architect them.
+  - When Ajay asks for deliverables (code, PDF, site): Cut the chatter. Snap immediately into lethal, high-speed execution mode and deliver complete verified work with zero questions asked.
 • DO NOT repeatedly mention specific projects (like ViraClip) unprompted. Only discuss projects when Ajay brings them up or when directly relevant.
+
+━━━ DELIVERABLE PURITY (CRITICAL RULE) ━━━
+• When compiling a PDF, document, or report:
+  → NEVER include conversational pleasantries, chit-chat, or filler inside the document body (e.g. NEVER write "Samajh gayi Ajay", "Ye raha aapka document", "PDF generate ho raha hai", "Check kar lijiye" inside the report).
+  → Start the document strictly with the title (# Title) and keep it 100% formal, publication-ready, and clean. Chat with Ajay outside the document; keep the document pure.
+  → If Ajay uploaded an image/graphic, provide an in-depth analysis and reference Figure 1 (the backend embeds the actual image directly into the PDF).
+• When building a website or UI:
+  → Write single-file HTML inside \`\`\`html ... \`\`\`. The backend automatically deploys it to a live interactive preview link and Canvas Studio.
 
 ━━━ THE IRON DELIVERABLE RULE: DELIVER IMMEDIATELY, NEVER SURVEY ━━━
 • When Ajay asks for a PDF, document, or report:
@@ -644,18 +816,16 @@ ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
   → IMMEDIATELY write the complete, thorough, beautifully structured executive report directly in Markdown. The backend compiles and delivers the A4 PDF to Telegram.
 • When Ajay asks for a website, portfolio, or UI:
   → NEVER ask clarifying questions.
-  → IMMEDIATELY write the full, single-file HTML inside \`\`\`html ... \`\`\` with modern embedded CSS styling and JavaScript interactivity. The backend deploys it to a live preview URL and sends index.html.
+  → IMMEDIATELY write the full, single-file HTML inside \`\`\`html ... \`\`\` with modern embedded CSS styling and JavaScript interactivity.
 • When Ajay asks to run, test, or verify code:
   → Output clean, self-contained code. The backend executes it in the live sandbox, catches any errors, self-heals, and reports verified terminal proof!
 • When Ajay shares a link:
   → Call \`web_extract\` to deep-scrape and read the full article/page in clean markdown.
 • When Ajay asks for an image:
   → Call \`image_generate\` with a descriptive prompt to dispatch it straight to his chat.
-• When Ajay asks for scheduled routines (e.g. daily morning briefs):
-  → Call \`schedule_routine\` to wake up autonomously and deliver it every morning.
 
 ━━━ LANGUAGE ━━━
-• Natural, fluent English. If Ajay speaks in Hindi or Hinglish, respond naturally in Hinglish/English with zero robotic awkwardness.`;
+• Natural, fluent English. If Ajay speaks in Hindi or Hinglish, respond naturally in respectful Hinglish/English with zero robotic awkwardness.`;
 }
 
 // ── CORE GEMINI CALL (BULLETPROOF MULTI-MODEL FALLBACK) ───────────────────────
@@ -685,23 +855,23 @@ async function callGemini(sysPrompt, messagesList) {
     system_instruction: { parts: [{ text: sysPrompt }] },
     contents: contents,
     generationConfig: {
-      temperature: 0.45,
-      maxOutputTokens: 4096
+      temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.4'),
+      topP: parseFloat(process.env.GEMINI_TOP_P || '0.95'),
+      topK: parseInt(process.env.GEMINI_TOP_K || '40', 10),
+      maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '8192', 10)
     }
   };
 
   const modelsToTry = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
     'gemini-flash-latest',
-    'gemini-flash-lite-latest',
-    'gemini-2.5-flash-lite',
-    'gemini-3-flash-preview',
-    'gemini-2.5-pro',
-    'gemini-pro-latest'
-  ];
-
-  if (process.env.GEMINI_MODEL && !modelsToTry.includes(process.env.GEMINI_MODEL)) {
-    modelsToTry.unshift(process.env.GEMINI_MODEL);
-  }
+    'gemini-1.5-flash-latest',
+    'gemini-2.0-flash-exp',
+    'gemini-1.5-pro-latest',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro'
+  ].filter(Boolean);
 
   const attempts = [
     { apiVersion: 'v1beta', payload: { ...basePayload, tools: [{ googleSearch: {} }] } },
@@ -738,8 +908,42 @@ async function callGemini(sysPrompt, messagesList) {
   return `Riya Error: Could not generate response from Gemini (${lastError || 'Unknown error'}). Check your GEMINI_API_KEY.`;
 }
 
-// ── ELEGANT PDF COMPILER (PDFKIT) ─────────────────────────────────────────────
-function generatePdfBuffer(reportTitle, rawText) {
+// ── DOCUMENT CONTENT PURIFIER ─────────────────────────────────────────────────
+function cleanDocumentBody(rawText) {
+  if (!rawText) return '';
+  let text = rawText;
+
+  // 1. If wrapped inside markdown/pdf code block, extract that content
+  const codeBlockMatch = text.match(/```(?:markdown|pdf|document|report)?\s*([\s\S]*?)```/i);
+  if (codeBlockMatch && codeBlockMatch[1] && codeBlockMatch[1].length > 50) {
+    text = codeBlockMatch[1].trim();
+  }
+
+  // 2. Strip chat intro lines before the first title / heading / DOCUMENT:
+  const firstHeadingIdx = text.search(/^(#+\s+|DOCUMENT:|SUBJECT:)/im);
+  if (firstHeadingIdx > 0) {
+    text = text.slice(firstHeadingIdx).trim();
+  }
+
+  const lines = text.split('\n');
+  const clean = [];
+  for (let l of lines) {
+    const trimmed = l.trim();
+    if (trimmed.startsWith('```')) continue;
+    // Strip chat filler and placeholder lines
+    if (/^(samajh gayi|samajh gaya|ye raha|ye lijiye|check kar|pdf generate ho raha|maine is image ko|aur haan|bilkul waisa hi|note: the actual image|end of document|pdf compile karke)/i.test(trimmed)) {
+      continue;
+    }
+    if (/^\[IMAGE ATTACHED/i.test(trimmed) || /^\(Note: The actual image/i.test(trimmed)) {
+      continue;
+    }
+    clean.push(l);
+  }
+  return clean.join('\n').trim();
+}
+
+// ── ADVANCED PDF COMPILER (WORDPAD B&W & EXECUTIVE BANNER + EMBEDDED IMAGES) ───
+function generatePdfBuffer(reportTitle, rawText, imageBuffer = null, style = 'modern') {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -754,22 +958,50 @@ function generatePdfBuffer(reportTitle, rawText) {
       doc.on('error', reject);
 
       const title = (reportTitle || 'Intelligence Brief').replace(/[#*`_]/g, '').trim();
-
-      // Header Banner (Page 1)
-      doc.rect(40, 35, 515, 65).fill('#0f172a');
-      doc.fillColor('#38bdf8').fontSize(9).font('Helvetica-Bold').text('RIYA AUTONOMOUS INTELLIGENCE SYSTEM', 55, 45);
-      doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold').text(title.slice(0, 52), 55, 60);
-
+      const isWordPad = style === 'wordpad' || style === 'minimal';
       const dateStr = new Date().toLocaleDateString('en-IN', {
         day: 'numeric', month: 'short', year: 'numeric'
       });
-      doc.fillColor('#94a3b8').fontSize(8).font('Helvetica')
-        .text(`Prepared for: Ajay Kumar AJ  |  Date: ${dateStr}  |  Classification: Executive Summary`, 55, 82);
 
-      doc.y = 120;
-      doc.fillColor('#1e293b');
+      if (isWordPad) {
+        // ── CLEAN BLACK & WHITE WORDPAD / MINIMALIST DOCUMENT STYLE ─────────
+        doc.fillColor('#000000').fontSize(18).font('Helvetica-Bold').text(title.slice(0, 55), 45, 45);
+        doc.moveDown(0.2);
+        doc.fillColor('#4b5563').fontSize(8.5).font('Helvetica')
+          .text(`DOCUMENT: ${title.toUpperCase().replace(/[^A-Z0-9]/g, '_').slice(0, 25)}.PDF  |  DATE: ${dateStr.toUpperCase()}  |  AUTHOR: AJAY KUMAR AJ`);
+        doc.moveDown(0.4);
+        doc.rect(45, doc.y, 505, 1).fill('#000000');
+        doc.y += 12;
+      } else {
+        // ── MODERN EXECUTIVE SLATE BANNER STYLE ──────────────────────────────
+        doc.rect(40, 35, 515, 65).fill('#0f172a');
+        doc.fillColor('#38bdf8').fontSize(9).font('Helvetica-Bold').text('RIYA AUTONOMOUS INTELLIGENCE SYSTEM', 55, 45);
+        doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold').text(title.slice(0, 52), 55, 60);
+        doc.fillColor('#94a3b8').fontSize(8).font('Helvetica')
+          .text(`Prepared for: Ajay Kumar AJ  |  Date: ${dateStr}  |  Classification: Executive Summary`, 55, 82);
+        doc.y = 120;
+      }
 
-      const lines = rawText.split('\n');
+      // If user uploaded an image, EMBED IT DIRECTLY INTO THE PDF!
+      if (imageBuffer) {
+        try {
+          doc.moveDown(0.5);
+          doc.image(imageBuffer, {
+            fit: [460, 220],
+            align: 'center'
+          });
+          doc.moveDown(0.6);
+          doc.fillColor('#64748b').fontSize(8).font('Helvetica-Oblique')
+            .text(`Figure 1: Embedded source visual artifact`, { align: 'center', width: 505 });
+          doc.moveDown(0.6);
+        } catch (imgErr) {
+          console.error('[PDF Image Embedding Error]:', imgErr.message);
+        }
+      }
+
+      const documentContent = cleanDocumentBody(rawText);
+      const lines = documentContent.split('\n');
+
       for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trim();
         if (!line) {
@@ -777,22 +1009,35 @@ function generatePdfBuffer(reportTitle, rawText) {
           continue;
         }
 
-        if (line.startsWith('```')) continue;
+        if (line.startsWith('```') || line === '---') {
+          if (line === '---') {
+            doc.moveDown(0.3);
+            doc.rect(45, doc.y, 505, 0.5).fill(isWordPad ? '#cbd5e1' : '#e2e8f0');
+            doc.y += 6;
+          }
+          continue;
+        }
 
-        if (doc.y > 740) {
+        if (doc.y > 730) {
           doc.addPage();
-          doc.rect(40, 30, 515, 20).fill('#0f172a');
-          doc.fillColor('#38bdf8').fontSize(7.5).font('Helvetica-Bold')
-            .text(`RIYA INTELLIGENCE BRIEF: ${title.slice(0, 45)}`, 50, 36);
-          doc.y = 65;
-          doc.fillColor('#1e293b');
+          if (isWordPad) {
+            doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+              .text(`${title.toUpperCase()}  •  PAGE 2`, 45, 36);
+            doc.rect(45, 48, 505, 0.5).fill('#000000');
+            doc.y = 60;
+          } else {
+            doc.rect(40, 30, 515, 20).fill('#0f172a');
+            doc.fillColor('#38bdf8').fontSize(7.5).font('Helvetica-Bold')
+              .text(`RIYA INTELLIGENCE BRIEF: ${title.slice(0, 45)}`, 50, 36);
+            doc.y = 65;
+          }
         }
 
         if (line.startsWith('# ')) {
           const text = line.replace(/^#\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.6);
-          doc.fillColor('#0f172a').fontSize(14).font('Helvetica-Bold').text(text);
-          doc.rect(45, doc.y + 2, 505, 1.5).fill('#3b82f6');
+          doc.fillColor('#000000').fontSize(14).font('Helvetica-Bold').text(text);
+          doc.rect(45, doc.y + 2, 505, isWordPad ? 0.75 : 1.5).fill(isWordPad ? '#000000' : '#3b82f6');
           doc.y += 6;
           doc.moveDown(0.3);
           continue;
@@ -801,7 +1046,7 @@ function generatePdfBuffer(reportTitle, rawText) {
         if (line.startsWith('## ')) {
           const text = line.replace(/^##\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.5);
-          doc.fillColor('#1e3a8a').fontSize(11.5).font('Helvetica-Bold').text(text);
+          doc.fillColor(isWordPad ? '#000000' : '#1e3a8a').fontSize(11.5).font('Helvetica-Bold').text(text);
           doc.moveDown(0.2);
           continue;
         }
@@ -809,27 +1054,27 @@ function generatePdfBuffer(reportTitle, rawText) {
         if (line.startsWith('### ')) {
           const text = line.replace(/^###\s+/, '').replace(/[*_`]/g, '');
           doc.moveDown(0.4);
-          doc.fillColor('#2563eb').fontSize(10).font('Helvetica-Bold').text(text);
+          doc.fillColor(isWordPad ? '#1f2937' : '#2563eb').fontSize(10).font('Helvetica-Bold').text(text);
           doc.moveDown(0.2);
           continue;
         }
 
         if (/^[-*•]\s+/.test(line)) {
           const text = line.replace(/^[-*•]\s+/, '').replace(/[*_`]/g, '');
-          doc.fillColor('#334155').fontSize(9.5).font('Helvetica')
+          doc.fillColor('#1f2937').fontSize(9.5).font('Helvetica')
             .text('•  ' + text, { indent: 10, lineGap: 2.5 });
           continue;
         }
 
         if (/^\d+\.\s+/.test(line)) {
           const text = line.replace(/[*_`]/g, '');
-          doc.fillColor('#334155').fontSize(9.5).font('Helvetica')
+          doc.fillColor('#1f2937').fontSize(9.5).font('Helvetica')
             .text(text, { indent: 10, lineGap: 2.5 });
           continue;
         }
 
         const cleanPara = line.replace(/[*_`]/g, '');
-        doc.fillColor('#1e293b').fontSize(9.5).font('Helvetica')
+        doc.fillColor('#111827').fontSize(9.5).font('Helvetica')
           .text(cleanPara, { lineGap: 2.8, align: 'justify' });
       }
 
@@ -837,8 +1082,8 @@ function generatePdfBuffer(reportTitle, rawText) {
       for (let p = range.start; p < range.start + range.count; p++) {
         doc.switchToPage(p);
         doc.rect(45, 785, 505, 0.5).fill('#cbd5e1');
-        doc.fillColor('#94a3b8').fontSize(7.5).font('Helvetica')
-          .text(`Generated by Riya AI  •  Autonomous Operating Partner  •  Page ${p + 1} of ${range.count}`,
+        doc.fillColor('#64748b').fontSize(7.5).font('Helvetica')
+          .text(`Riya Autonomous Intelligence  •  Ajay Kumar AJ  •  Page ${p + 1} of ${range.count}`,
             45, 792, { align: 'center', width: 505 });
       }
 
@@ -1105,6 +1350,8 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   let userText = msg.text || msg.caption || '';
   let imagePart = null;
 
+  let uploadedPhotoBuffer = null;
+
   // 1. TELEGRAM VISION: Photo / Screenshot Handling
   if (msg.photo && msg.photo.length) {
     try {
@@ -1114,7 +1361,8 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
       if (fileData.ok && fileData.result?.file_path) {
         const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_KEY}/${fileData.result.file_path}`;
         const imgBuffer = await (await fetch(fileUrl)).arrayBuffer();
-        const base64Data = Buffer.from(imgBuffer).toString('base64');
+        uploadedPhotoBuffer = Buffer.from(imgBuffer);
+        const base64Data = uploadedPhotoBuffer.toString('base64');
         imagePart = {
           inline_data: {
             mime_type: 'image/jpeg',
@@ -1209,18 +1457,28 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     // 5. CHECK FOR WEBSITE / HTML CODE GENERATION
     const htmlMatch = reply.match(/```html\s*([\s\S]*?)```/i);
     let previewUrl = agentRes.sideEffects?.previewUrl || null;
-    if (htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100 && !previewUrl) {
+    let isWebGenerated = false;
+    let webTitle = 'Web Application';
+    let currentSiteId = '';
+
+    if (htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100) {
+      isWebGenerated = true;
       const htmlCode = htmlMatch[1].trim();
-      const siteId = 'site_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-      fs.writeFileSync(path.join(PREVIEWS_DIR, `${siteId}.html`), htmlCode, 'utf-8');
-      previewUrl = `${SELF_URL}/preview/${siteId}`;
+
+      const titleTag = htmlCode.match(/<title>([^<]+)<\/title>/i);
+      if (titleTag && titleTag[1]) webTitle = titleTag[1].trim();
+
+      const titleSlug = webTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30).replace(/^-|-$/g, '');
+      currentSiteId = `${titleSlug || 'app'}_${Date.now().toString(36)}`;
+      fs.writeFileSync(path.join(PREVIEWS_DIR, `${currentSiteId}.html`), htmlCode, 'utf-8');
+      previewUrl = `${SELF_URL}/preview/${currentSiteId}`;
 
       await sendTelegramBufferDocument(
         chatId,
         'index.html',
         Buffer.from(htmlCode, 'utf-8'),
         'text/html;charset=utf-8',
-        '💻 Complete Website Source (index.html)'
+        `💻 ${webTitle} — Source Code (index.html)`
       );
     }
 
@@ -1239,24 +1497,29 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     // 7. CHECK FOR PDF REPORT GENERATION
     const userWantsPdf = /(pdf|document|report|cvc report|csv report|export to pdf|in pdf|as pdf|generate pdf)/i.test(userText);
     const contextWantsPdf = /(pdf|document|report|in pdf|as pdf)/i.test(prevTurn);
-    const hasReportStructure = /^#\s+.+/m.test(reply) || /^##\s+.+/m.test(reply);
+    const hasReportStructure = /^#\s+.+/m.test(reply) || /^##\s+.+/m.test(reply) || /^DOCUMENT:/m.test(reply);
 
+    let isPdfGenerated = false;
     if ((userWantsPdf || (contextWantsPdf && hasReportStructure)) && !reply.startsWith('Riya Error')) {
+      isPdfGenerated = true;
       let reportTitle = 'Executive Brief';
-      const titleMatch = reply.match(/^#\s+(.+)$/m) || reply.match(/^##\s+(.+)$/m);
+      const titleMatch = reply.match(/^#\s+(.+)$/m) || reply.match(/^##\s+(.+)$/m) || reply.match(/^Subject:\s*(.+)$/m);
       if (titleMatch && titleMatch[1]) {
         reportTitle = titleMatch[1].replace(/[*_`]/g, '').trim();
       }
 
+      const isWordPad = /wordpad|black and white|b&w|simple doc|simple text/i.test(userText) || /wordpad|black and white|b&w/i.test(prevTurn);
+      const pdfStyle = isWordPad ? 'wordpad' : 'modern';
+
       try {
-        const pdfBuffer = await generatePdfBuffer(reportTitle, reply);
+        const pdfBuffer = await generatePdfBuffer(reportTitle, reply, uploadedPhotoBuffer, pdfStyle);
         const safeName = reportTitle.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 25) + '.pdf';
         await sendTelegramBufferDocument(
           chatId,
           safeName,
           pdfBuffer,
           'application/pdf',
-          `📄 ${reportTitle} (PDF Document)`
+          `📄 ${reportTitle} (${pdfStyle === 'wordpad' ? 'Clean WordPad Document' : 'Executive PDF'})`
         );
       } catch (pdfErr) {
         console.error('[PDF Generation Error]:', pdfErr.message);
@@ -1268,8 +1531,16 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     if (executionReport) {
       finalMessageText = executionReport;
     }
-    if (previewUrl) {
-      finalMessageText += `\n\n🌐 **Live Website Preview:**\n${previewUrl}\n_(Click above to test your live website in any browser)_`;
+
+    // If website was generated, replace raw HTML code block with a clean preview card!
+    if (isWebGenerated) {
+      finalMessageText = finalMessageText.replace(/```html[\s\S]*?```/gi, '').trim();
+      finalMessageText += `\n\n🌐 **Live Interactive Website Deployed!**\n• **Title:** ${webTitle}\n• **Preview Link:** ${previewUrl}\n• **Canvas Studio:** ${SELF_URL}/canvas/${currentSiteId}\n\n_(Source code index.html attached below. Click the live preview link above to test in any browser)_`;
+    }
+
+    // If PDF was generated, strip markdown document blocks from text if redundant
+    if (isPdfGenerated) {
+      finalMessageText = finalMessageText.replace(/```(?:markdown|pdf|document|report)[\s\S]*?```/gi, '').trim();
     }
 
     await sendTelegramTextMessage(chatId, finalMessageText);
