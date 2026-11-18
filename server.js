@@ -76,7 +76,7 @@ app.use('/api/', rateLimiter(60));
 // ── CORE ENVIRONMENT CONFIGURATION ────────────────────────────────────────────
 const GEMINI_KEY   = process.env.GEMINI_API_KEY    || '';
 const TELEGRAM_KEY = process.env.TELEGRAM_BOT_TOKEN || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-flash-latest';
+const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-3.5-flash';
 
 // Live Render external domain
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-hgn9.onrender.com';
@@ -884,13 +884,16 @@ async function callGemini(sysPrompt, messagesList) {
 
   const modelsToTry = [
     process.env.GEMINI_MODEL,
-    'gemini-2.0-flash',
-    'gemini-flash-latest',
-    'gemini-1.5-flash-latest',
-    'gemini-2.0-flash-exp',
-    'gemini-1.5-pro-latest',
-    'gemini-2.5-flash',
-    'gemini-2.5-pro'
+    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3-flash-preview',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-3.1-pro-preview',
+    'gemini-pro-latest',
+    'gemini-flash-latest'
   ].filter(Boolean);
 
   const attempts = [
