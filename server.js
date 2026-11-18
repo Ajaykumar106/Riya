@@ -11,7 +11,7 @@ app.use(express.json({ limit: '20mb' }));
 // Google AI Studio (Free Tier: 15 RPM, 1,500 req/day, 1M context, Google Search Grounding)
 const GEMINI_KEY   = process.env.GEMINI_API_KEY    || '';
 const TELEGRAM_KEY = process.env.TELEGRAM_BOT_TOKEN || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-1.5-flash';
 
 // Keep Render free service awake (pings self every 14 mins)
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-backend-ujz7.onrender.com';
@@ -113,57 +113,11 @@ ${modeMap[mood] || modeMap.normal}
 • Never say "great question", "certainly!", "as an AI", or "I cannot". Get straight to the point.`;
 }
 
-// ── DYNAMIC MODEL DISCOVERY (NEVER FAILS ON MODEL NAME MISMATCH) ─────────────
-let CACHED_WORKING_MODEL = null;
-
-async function getAvailableModel() {
-  if (CACHED_WORKING_MODEL) return CACHED_WORKING_MODEL;
-
-  if (!GEMINI_KEY) return 'gemini-1.5-flash';
-
-  try {
-    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_KEY}`);
-    const listData = await listRes.json();
-    if (listData.models && Array.isArray(listData.models)) {
-      const supported = listData.models
-        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-        .map(m => m.name.replace(/^models\//, ''));
-
-      console.log('[Gemini Active Models on Account]:', supported.join(', '));
-
-      // Preferred order of high-performance models
-      const preferred = [
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-2.0-flash-exp',
-        'gemini-1.5-pro'
-      ];
-      for (const p of preferred) {
-        if (supported.includes(p)) {
-          CACHED_WORKING_MODEL = p;
-          return p;
-        }
-      }
-      if (supported.length > 0) {
-        CACHED_WORKING_MODEL = supported[0];
-        return supported[0];
-      }
-    }
-  } catch (err) {
-    console.warn('[Model Discovery Warning]:', err.message);
-  }
-
-  return 'gemini-1.5-flash';
-}
-
-// ── CORE GEMINI CALL (BULLETPROOF WITH LIVE GROUNDING) ────────────────────────
+// ── CORE GEMINI CALL (BULLETPROOF MULTI-MODEL FALLBACK) ───────────────────────
 async function callGemini(sysPrompt, messagesList) {
   if (!GEMINI_KEY) {
     return "Joya Protocol active. Please configure GEMINI_API_KEY in your environment variables.";
   }
-
-  const model = await getAvailableModel();
 
   // Format messages into Gemini format
   const contents = [];
@@ -188,10 +142,18 @@ async function callGemini(sysPrompt, messagesList) {
     }
   };
 
-  // 3-Stage Attempt Pipeline:
-  // 1. v1beta with Google Search Grounding (REST API camelCase googleSearch)
-  // 2. v1beta clean without tools
-  // 3. v1 stable endpoint
+  // Models to try in priority order (Free Tier on Google AI Studio)
+  const modelsToTry = [
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-pro'
+  ];
+
+  if (process.env.GEMINI_MODEL && !modelsToTry.includes(process.env.GEMINI_MODEL)) {
+    modelsToTry.unshift(process.env.GEMINI_MODEL);
+  }
+
   const attempts = [
     { apiVersion: 'v1beta', payload: { ...basePayload, tools: [{ googleSearch: {} }] } },
     { apiVersion: 'v1beta', payload: basePayload },
@@ -200,26 +162,27 @@ async function callGemini(sysPrompt, messagesList) {
 
   let lastError = null;
 
-  for (const att of attempts) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${GEMINI_KEY}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(att.payload)
-      });
+  for (const model of modelsToTry) {
+    for (const att of attempts) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${GEMINI_KEY}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(att.payload)
+        });
 
-      const data = await res.json();
-      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-        return data.candidates[0].content.parts[0].text.trim();
-      }
+        const data = await res.json();
+        if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+          return data.candidates[0].content.parts[0].text.trim();
+        }
 
-      if (data.error) {
-        lastError = data.error.message;
-        console.warn(`[Gemini Attempt ${att.apiVersion} Info]:`, data.error.message);
+        if (data.error) {
+          lastError = data.error.message;
+        }
+      } catch (e) {
+        lastError = e.message;
       }
-    } catch (e) {
-      lastError = e.message;
     }
   }
 
