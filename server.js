@@ -8,8 +8,70 @@ const { runInSandbox, runAutonomousReActLoop } = require('./sandbox');
 const { FUNCTION_DECLARATIONS, executeTool, callGeminiAgent, extractWebPage } = require('./tools');
 
 const app = express();
+app.disable('x-powered-by');
+
+// Security Response Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '20mb' }));
+
+// ── IN-MEMORY RATE LIMITER (DOS & BRUTE-FORCE PROTECTION) ─────────────────────
+const ipRequestCounts = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of ipRequestCounts.entries()) {
+    if (now - record.windowStart > 60000) {
+      ipRequestCounts.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
+function rateLimiter(maxPerMinute = 60) {
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    const key = `${ip}_${req.baseUrl || req.path}`;
+    const now = Date.now();
+    let record = ipRequestCounts.get(key);
+
+    if (!record || now - record.windowStart > 60000) {
+      record = { windowStart: now, count: 1 };
+      ipRequestCounts.set(key, record);
+      return next();
+    }
+
+    record.count++;
+    if (record.count > maxPerMinute) {
+      return res.status(429).json({
+        error: 'Too Many Requests',
+        message: 'Rate limit exceeded. Please throttle your requests.'
+      });
+    }
+    next();
+  };
+}
+
+// ── ADMIN AUTHENTICATION GUARD ────────────────────────────────────────────────
+const RIYA_API_KEY = process.env.RIYA_API_KEY || '';
+if (!RIYA_API_KEY) {
+  console.log('>> [Security Notice] RIYA_API_KEY is not configured in env. Admin endpoints running in rate-limited open mode. Set RIYA_API_KEY in Render to enforce strict token authentication.');
+}
+
+function requireAdminAuth(req, res, next) {
+  if (!RIYA_API_KEY) return next();
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-api-key'] || req.query.key || '');
+  if (token === RIYA_API_KEY) return next();
+  return res.status(401).json({ error: 'Unauthorized', message: 'Valid RIYA_API_KEY required.' });
+}
+
+// Apply baseline rate limiting to all /api/ routes
+app.use('/api/', rateLimiter(60));
 
 // ── CORE ENVIRONMENT CONFIGURATION ────────────────────────────────────────────
 const GEMINI_KEY   = process.env.GEMINI_API_KEY    || '';
@@ -150,7 +212,14 @@ app.use('/previews', express.static(PREVIEWS_DIR));
 
 app.get(['/preview/:id', '/site/:id'], (req, res) => {
   const safeId = (req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
-  const filePath = path.join(PREVIEWS_DIR, `${safeId}.html`);
+  const filePath = path.resolve(PREVIEWS_DIR, `${safeId}.html`);
+  const resolvedPreviewsDir = path.resolve(PREVIEWS_DIR);
+
+  // Path Traversal Security Verification
+  if (!filePath.startsWith(resolvedPreviewsDir)) {
+    return res.status(403).send('Forbidden: Path traversal detected.');
+  }
+
   if (fs.existsSync(filePath)) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.sendFile(filePath);
@@ -169,8 +238,8 @@ app.get(['/preview/:id', '/site/:id'], (req, res) => {
   `);
 });
 
-// Diagnostic endpoints
-app.get('/api/test-gemini', async (req, res) => {
+// Diagnostic endpoints (Admin Protected)
+app.get('/api/test-gemini', requireAdminAuth, async (req, res) => {
   const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!cleanKey) return res.json({ error: 'GEMINI_API_KEY is missing in Render Environment Variables' });
   try {
@@ -186,7 +255,7 @@ app.get('/api/test-gemini', async (req, res) => {
   }
 });
 
-app.get('/api/test-embedding', async (req, res) => {
+app.get('/api/test-embedding', requireAdminAuth, async (req, res) => {
   const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   try {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${cleanKey}`, {
@@ -338,14 +407,14 @@ app.get('/api/memories', async (req, res) => {
   }
 });
 
-app.post('/api/memories', async (req, res) => {
+app.post('/api/memories', requireAdminAuth, async (req, res) => {
   const { category, content, importance, metadata } = req.body;
   if (!content) return res.status(400).json({ error: 'content is required' });
   const result = await saveMemoryFact(category, content, importance || 1, metadata || {});
   res.json({ success: true, result });
 });
 
-app.delete('/api/memories/:id', async (req, res) => {
+app.delete('/api/memories/:id', requireAdminAuth, async (req, res) => {
   try {
     await dbPool.query('DELETE FROM riya_memories WHERE id = $1;', [req.params.id]);
     res.json({ success: true, deletedId: req.params.id });
@@ -364,7 +433,7 @@ app.get('/api/routines', async (req, res) => {
   }
 });
 
-app.post('/api/extract', async (req, res) => {
+app.post('/api/extract', rateLimiter(30), async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'url is required' });
   const result = await extractWebPage(url);
@@ -372,14 +441,14 @@ app.post('/api/extract', async (req, res) => {
 });
 
 // ── HTTP API: SANDBOX CODE EXECUTION & REACT LOOP ─────────────────────────────
-app.post('/api/sandbox/run', async (req, res) => {
+app.post('/api/sandbox/run', rateLimiter(20), requireAdminAuth, async (req, res) => {
   const { language, code, timeoutMs } = req.body;
   if (!code) return res.status(400).json({ error: 'code is required' });
   const result = await runInSandbox(language || 'javascript', code, timeoutMs || 7000);
   res.json(result);
 });
 
-app.post('/api/sandbox/react', async (req, res) => {
+app.post('/api/sandbox/react', rateLimiter(10), requireAdminAuth, async (req, res) => {
   const { prompt, language, maxAttempts } = req.body;
   if (!prompt) return res.status(400).json({ error: 'prompt is required' });
   const lang = language || 'javascript';
@@ -395,7 +464,7 @@ app.get('/api/tools', (req, res) => {
   });
 });
 
-app.post('/api/tools/execute', async (req, res) => {
+app.post('/api/tools/execute', rateLimiter(25), requireAdminAuth, async (req, res) => {
   const { tool, args } = req.body;
   if (!tool) return res.status(400).json({ error: 'tool name is required' });
   const result = await executeTool(tool, args || {}, {
@@ -838,6 +907,16 @@ app.post('/api/search', async (req, res) => {
 const telegramHistories = {};
 
 app.post(['/webhook', '/api/telegram'], async (req, res) => {
+  // 1. Verify Telegram Webhook Secret Token if configured
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+  if (webhookSecret) {
+    const receivedSecret = req.headers['x-telegram-bot-api-secret-token'];
+    if (receivedSecret !== webhookSecret) {
+      console.warn('>> [Security Alert] Webhook rejected: Invalid or missing X-Telegram-Bot-Api-Secret-Token.');
+      return res.status(401).send('Unauthorized webhook call.');
+    }
+  }
+
   res.sendStatus(200);
 
   const update = req.body;
@@ -845,10 +924,30 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   if (!msg || !TELEGRAM_KEY) return;
 
   const chatId = msg.chat?.id;
-  let userText = msg.text || msg.caption || '';
-  let imagePart = null;
+  const fromId = msg.from?.id ? String(msg.from.id) : '';
+  const fromUsername = msg.from?.username ? msg.from.username.toLowerCase() : '';
 
   if (!chatId) return;
+
+  // 2. Telegram User Authorization Guard (Prevent unauthorized hijacking)
+  const allowedUsers = (process.env.ALLOWED_TELEGRAM_USERS || '')
+    .split(',')
+    .map(u => u.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (allowedUsers.length > 0) {
+    const isAuthorized = allowedUsers.includes(String(chatId)) ||
+                         allowedUsers.includes(fromId) ||
+                         (fromUsername && allowedUsers.includes(fromUsername)) ||
+                         (fromUsername && allowedUsers.includes('@' + fromUsername));
+    if (!isAuthorized) {
+      console.warn(`>> [Security Block] Telegram message ignored from unauthorized sender: chatId=${chatId}, fromId=${fromId}, username=${fromUsername}`);
+      return;
+    }
+  }
+
+  let userText = msg.text || msg.caption || '';
+  let imagePart = null;
 
   // 1. TELEGRAM VISION: Photo / Screenshot Handling
   if (msg.photo && msg.photo.length) {

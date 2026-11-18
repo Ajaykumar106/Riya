@@ -59,10 +59,26 @@ function runInSandbox(language, code, timeoutMs = 7000) {
     let stderr = '';
     let isTimedOut = false;
 
+    // SECURITY HARDENING: Explicitly isolate sandbox environment.
+    // NEVER pass host process.env containing DATABASE_URL, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, or GITHUB_TOKEN.
+    const safeEnv = {
+      PATH: process.env.PATH || '',
+      NODE_ENV: 'sandbox',
+      HOME: os.tmpdir(),
+      TMPDIR: os.tmpdir(),
+      LANG: 'en_US.UTF-8'
+    };
+    if (process.platform === 'win32') {
+      safeEnv.SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+      safeEnv.WINDIR = process.env.WINDIR || 'C:\\Windows';
+      safeEnv.PATHEXT = process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD';
+    }
+
     const child = spawn(cmd, args, {
+      cwd: SANDBOX_DIR,
       timeout: timeoutMs,
       maxBuffer: 1024 * 512,
-      env: { ...process.env, NODE_ENV: 'test' }
+      env: safeEnv
     });
 
     const timer = setTimeout(() => {

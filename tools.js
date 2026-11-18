@@ -148,6 +148,86 @@ const FUNCTION_DECLARATIONS = [
     }
   }
 ];
+ 
+/**
+ * SECURITY DEFENSE: SSRF (Server-Side Request Forgery) Protection
+ * Validates protocol and blocks loopback, private IP ranges, and cloud metadata services.
+ */
+function isPrivateOrInternalUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { blocked: true, reason: `Disallowed protocol: ${parsed.protocol}` };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Block loopback and all-interfaces
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host === '[::1]'
+    ) {
+      return { blocked: true, reason: 'Access to localhost / loopback addresses is prohibited.' };
+    }
+
+    // Block cloud metadata services (AWS, GCP, Azure, OpenStack)
+    if (
+      host === '169.254.169.254' ||
+      host === 'metadata.google.internal' ||
+      host === 'instance-data' ||
+      host.endsWith('.internal') ||
+      host.endsWith('.local') ||
+      host.endsWith('.localhost')
+    ) {
+      return { blocked: true, reason: 'Access to internal network or cloud metadata services is prohibited.' };
+    }
+
+    // Check private IPv4 ranges (RFC 1918 & RFC 3927)
+    const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4Match) {
+      const p1 = parseInt(ipv4Match[1], 10);
+      const p2 = parseInt(ipv4Match[2], 10);
+      if (p1 === 10) return { blocked: true, reason: 'Access to private network (10.0.0.0/8) is prohibited.' };
+      if (p1 === 127) return { blocked: true, reason: 'Access to loopback network (127.0.0.0/8) is prohibited.' };
+      if (p1 === 169 && p2 === 254) return { blocked: true, reason: 'Access to link-local network (169.254.0.0/16) is prohibited.' };
+      if (p1 === 172 && (p2 >= 16 && p2 <= 31)) return { blocked: true, reason: 'Access to private network (172.16.0.0/12) is prohibited.' };
+      if (p1 === 192 && p2 === 168) return { blocked: true, reason: 'Access to private network (192.168.0.0/16) is prohibited.' };
+      if (p1 === 0) return { blocked: true, reason: 'Access to 0.0.0.0/8 is prohibited.' };
+    }
+
+    return { blocked: false };
+  } catch (err) {
+    return { blocked: true, reason: `Invalid URL format: ${err.message}` };
+  }
+}
+
+/**
+ * SECURITY DEFENSE: Path Traversal & Sensitive File Exposure Blocker
+ */
+function isSensitiveOrTraversingPath(filePath) {
+  if (!filePath || typeof filePath !== 'string') return true;
+  const clean = filePath.replace(/\\/g, '/').trim();
+  if (clean.includes('..') || clean.startsWith('/') || clean.startsWith('~')) {
+    return true;
+  }
+  const sensitivePatterns = [
+    /^\.env/i,
+    /\.env\./i,
+    /^\.git(\/|$)/i,
+    /id_rsa/i,
+    /id_ed25519/i,
+    /credentials/i,
+    /secret/i,
+    /\.npmrc/i,
+    /\.bash_history/i,
+    /\.aws/i,
+    /\.ssh/i
+  ];
+  return sensitivePatterns.some(p => p.test(clean));
+}
 
 /**
  * Deep-scrape any URL using Jina Reader (with native fetch fallback)
@@ -155,6 +235,12 @@ const FUNCTION_DECLARATIONS = [
 async function extractWebPage(url) {
   if (!url) return { error: 'No URL provided' };
   const cleanUrl = url.trim();
+
+  // Enforce SSRF validation
+  const validation = isPrivateOrInternalUrl(cleanUrl);
+  if (validation.blocked) {
+    return { error: `Security Violation: ${validation.reason}` };
+  }
 
   // Try Jina Reader markdown API
   try {
@@ -338,6 +424,11 @@ async function executeTool(toolName, toolArgs, context = {}) {
         const repo = toolArgs.repo || 'Riya';
         const filePath = toolArgs.path || 'package.json';
         const branch = toolArgs.branch || 'main';
+
+        if (isSensitiveOrTraversingPath(filePath)) {
+          return { error: 'Security Violation: Access to sensitive credential or traversing file paths is prohibited.' };
+        }
+
         const token = process.env.GITHUB_TOKEN || '';
         const headers = { 'User-Agent': 'Riya-Agent' };
         if (token) headers['Authorization'] = `token ${token}`;
@@ -358,6 +449,11 @@ async function executeTool(toolName, toolArgs, context = {}) {
         const content = toolArgs.content || '';
         const message = toolArgs.message || `Update ${filePath} via Riya AI`;
         const branch = toolArgs.branch || 'main';
+
+        if (isSensitiveOrTraversingPath(filePath)) {
+          return { error: 'Security Violation: Committing to sensitive credential or traversing file paths is prohibited.' };
+        }
+
         const token = process.env.GITHUB_TOKEN || '';
 
         if (!token) {

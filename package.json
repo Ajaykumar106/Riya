@@ -4,7 +4,8 @@
   "description": "Riya AI Backend Server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:security": "node test_security.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
