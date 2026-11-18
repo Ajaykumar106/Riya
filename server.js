@@ -159,12 +159,14 @@ async function callGemini(sysPrompt, messagesList) {
     }
   };
 
-  // Models to try in priority order (Free Tier on Google AI Studio)
+  // Models to try in priority order (Matched to Account's Active Gemini Models)
   const modelsToTry = [
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-pro'
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
+    'gemini-2.5-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-2.5-pro',
+    'gemini-pro-latest'
   ];
 
   if (process.env.GEMINI_MODEL && !modelsToTry.includes(process.env.GEMINI_MODEL)) {
