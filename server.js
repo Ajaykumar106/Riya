@@ -134,7 +134,21 @@ async function initDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    console.log('>> [Neon DB] Persistent Vector Memory & Routine Tables Active');
+
+    // Create persistent authorized users table for Telegram access control
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS riya_authorized_users (
+        id BIGSERIAL PRIMARY KEY,
+        chat_id TEXT UNIQUE NOT NULL,
+        user_id TEXT DEFAULT '',
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        role VARCHAR(20) DEFAULT 'user',
+        granted_by TEXT DEFAULT 'passphrase',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('>> [Neon DB] Persistent Vector Memory, Routines & Access Control Active');
 
     // Seed core profile if empty
     const countRes = await dbPool.query('SELECT count(*) as count FROM riya_memories;');
@@ -386,6 +400,101 @@ async function saveMemoryFact(category, content, importance = 1, metadata = {}) 
   }
 }
 
+// ── TELEGRAM ACCESS CONTROL & USER INVITATION SYSTEM ─────────────────────────
+const RIYA_ACCESS_CODE = (process.env.RIYA_ACCESS_CODE || 'riya2026').trim();
+
+async function isUserAuthorized(chatId, userId, username) {
+  const allowedEnv = (process.env.ALLOWED_TELEGRAM_USERS || '')
+    .split(',')
+    .map(u => u.trim().toLowerCase())
+    .filter(Boolean);
+
+  const cId = String(chatId);
+  const uId = String(userId || '');
+  const uName = (username || '').toLowerCase();
+
+  // 1. Check environment variable whitelist
+  if (allowedEnv.length > 0) {
+    if (allowedEnv.includes(cId) ||
+        allowedEnv.includes(uId) ||
+        (uName && allowedEnv.includes(uName)) ||
+        (uName && allowedEnv.includes('@' + uName))) {
+      return true;
+    }
+  }
+
+  // 2. If no DB pool, fallback to open unless env whitelist is configured
+  if (!dbPool) return allowedEnv.length === 0;
+
+  // 3. Check persistent Neon Database
+  try {
+    const res = await dbPool.query(
+      `SELECT * FROM riya_authorized_users 
+       WHERE chat_id = $1 OR user_id = $2 OR (username != '' AND username = $3)
+       LIMIT 1;`,
+      [cId, uId, uName]
+    );
+    if (res.rows.length > 0) return true;
+
+    // If zero authorized users exist in the database, automatically register the first caller as admin (Ajay!)
+    const countRes = await dbPool.query('SELECT count(*) as count FROM riya_authorized_users;');
+    if (parseInt(countRes.rows[0].count, 10) === 0) {
+      await authorizeUser(cId, uId, uName, 'Ajay', 'admin', 'initial_creator');
+      console.log(`>> [Access Control] Initial creator registered as Admin: ${cId} (@${uName})`);
+      return true;
+    }
+  } catch (err) {
+    console.error('[isUserAuthorized Error]:', err.message);
+  }
+
+  return false;
+}
+
+async function authorizeUser(chatId, userId, username, firstName, role = 'user', grantedBy = 'passphrase') {
+  if (!dbPool) return false;
+  try {
+    await dbPool.query(`
+      INSERT INTO riya_authorized_users (chat_id, user_id, username, first_name, role, granted_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (chat_id) DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        username = EXCLUDED.username,
+        first_name = EXCLUDED.first_name,
+        role = EXCLUDED.role;
+    `, [String(chatId), String(userId || ''), (username || '').toLowerCase(), firstName || '', role, grantedBy]);
+    return true;
+  } catch (err) {
+    console.error('[authorizeUser Error]:', err.message);
+    return false;
+  }
+}
+
+async function revokeUser(target) {
+  if (!dbPool) return false;
+  try {
+    const clean = (target || '').replace(/^@/, '').toLowerCase().trim();
+    await dbPool.query(`
+      DELETE FROM riya_authorized_users 
+      WHERE chat_id = $1 OR user_id = $1 OR username = $2;
+    `, [clean, clean]);
+    return true;
+  } catch (err) {
+    console.error('[revokeUser Error]:', err.message);
+    return false;
+  }
+}
+
+async function listAuthorizedUsers() {
+  if (!dbPool) return [];
+  try {
+    const res = await dbPool.query(`SELECT chat_id, username, first_name, role, granted_by, created_at FROM riya_authorized_users ORDER BY id ASC;`);
+    return res.rows;
+  } catch (err) {
+    console.error('[listAuthorizedUsers Error]:', err.message);
+    return [];
+  }
+}
+
 // ── HTTP API: MEMORIES & ROUTINES ─────────────────────────────────────────────
 app.get('/api/memories', async (req, res) => {
   if (!dbPool) return res.json({ total: 0, memories: [], notice: 'DATABASE_URL not configured in environment variables' });
@@ -431,6 +540,11 @@ app.get('/api/routines', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/users', requireAdminAuth, async (req, res) => {
+  const users = await listAuthorizedUsers();
+  res.json({ total: users.length, users });
 });
 
 app.post('/api/extract', rateLimiter(30), async (req, res) => {
@@ -929,21 +1043,63 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
 
   if (!chatId) return;
 
-  // 2. Telegram User Authorization Guard (Prevent unauthorized hijacking)
-  const allowedUsers = (process.env.ALLOWED_TELEGRAM_USERS || '')
-    .split(',')
-    .map(u => u.trim().toLowerCase())
-    .filter(Boolean);
+  const cleanInput = (msg.text || msg.caption || '').trim();
 
-  if (allowedUsers.length > 0) {
-    const isAuthorized = allowedUsers.includes(String(chatId)) ||
-                         allowedUsers.includes(fromId) ||
-                         (fromUsername && allowedUsers.includes(fromUsername)) ||
-                         (fromUsername && allowedUsers.includes('@' + fromUsername));
-    if (!isAuthorized) {
-      console.warn(`>> [Security Block] Telegram message ignored from unauthorized sender: chatId=${chatId}, fromId=${fromId}, username=${fromUsername}`);
+  // 2. Handle /access <passcode> for user invitation & onboarding
+  if (/^\/access(\s+.*)?$/i.test(cleanInput)) {
+    const enteredCode = cleanInput.replace(/^\/access\s*/i, '').trim();
+    if (enteredCode === RIYA_ACCESS_CODE) {
+      await authorizeUser(chatId, fromId, fromUsername, msg.from?.first_name || '', 'user', 'access_code');
+      await sendTelegramTextMessage(
+        chatId,
+        `✨ **Access Granted!**\n\nWelcome! You have been authorized to use **Riya**—Ajay Kumar's autonomous intelligence partner.\n\nI can write & test code in a live sandbox, compile executive A4 PDF reports, deploy interactive web previews, scrape web docs, and recall project memory.\n\nHow can I help you today?`
+      );
+      return;
+    } else {
+      await sendTelegramTextMessage(
+        chatId,
+        `❌ **Invalid Access Code.**\n\nPlease check the passcode given by Ajay and reply with:\n\`/access <correct_code>\``
+      );
       return;
     }
+  }
+
+  // 3. Telegram Authorization Verification
+  const isAuthorized = await isUserAuthorized(chatId, fromId, fromUsername);
+  if (!isAuthorized) {
+    console.warn(`>> [Access Block] Unauthorized sender: chat=${chatId}, from=${fromId}, user=@${fromUsername}`);
+    await sendTelegramTextMessage(
+      chatId,
+      `🔒 **Access Restricted**\n\nHey there! I am **Riya**, Ajay Kumar's private autonomous operational partner.\n\nOnly Ajay and people he personally shares an access pass with can use this system.\n\nIf Ajay gave you an access code, reply with:\n\`/access <your_code>\`\nto unlock access.`
+    );
+    return;
+  }
+
+  // 4. Admin Management Commands (Available to authorized users)
+  if (/^\/(share|code|passcode)$/i.test(cleanInput)) {
+    await sendTelegramTextMessage(
+      chatId,
+      `🔑 **Riya Share Passcode:** \`${RIYA_ACCESS_CODE}\`\n\nTo share Riya with a friend or collaborator:\n1. Tell them to message this bot.\n2. Have them send:\n\`/access ${RIYA_ACCESS_CODE}\`\n\nThey will be permanently unlocked and registered in your database!`
+    );
+    return;
+  }
+
+  if (/^\/(users|team|whitelist)$/i.test(cleanInput)) {
+    const users = await listAuthorizedUsers();
+    if (!users.length) {
+      await sendTelegramTextMessage(chatId, `👥 No authorized users registered in database yet.`);
+      return;
+    }
+    const userListText = users.map((u, i) => `${i + 1}. ${u.first_name || 'User'} (${u.username ? '@' + u.username : 'ID: ' + u.chat_id}) — *${u.role}* (via ${u.granted_by})`).join('\n');
+    await sendTelegramTextMessage(chatId, `👥 **Authorized Users (${users.length}):**\n\n${userListText}\n\n_To revoke someone, send:_ \`/revoke @username\` _or_ \`/revoke <chat_id>\``);
+    return;
+  }
+
+  if (/^\/revoke\s+.+$/i.test(cleanInput)) {
+    const target = cleanInput.replace(/^\/revoke\s+/i, '').trim();
+    await revokeUser(target);
+    await sendTelegramTextMessage(chatId, `🗑️ Access revoked for: \`${target}\``);
+    return;
   }
 
   let userText = msg.text || msg.caption || '';
