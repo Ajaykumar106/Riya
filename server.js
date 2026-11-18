@@ -841,6 +841,7 @@ async function callGemini(sysPrompt, messagesList) {
     const parts = [];
     if (m.content) parts.push({ text: m.content });
     if (m.imagePart) parts.push(m.imagePart);
+    if (m.audioPart) parts.push(m.audioPart);
     contents.push({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: parts.length ? parts : [{ text: '' }]
@@ -1320,7 +1321,40 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     return;
   }
 
-  // 4. Admin Management Commands (Available to authorized users)
+  // 4. Admin & User Management Commands (Available to authorized users)
+  if (/^\/start$/i.test(cleanInput)) {
+    await sendTelegramTextMessage(
+      chatId,
+      `✨ **Riya AI Core Online**\n\nPranam Ajay! I am your autonomous operating partner and FRIDAY. Here is what we can do together:\n\n• 🎙️ **Voice Notes:** Send me any voice message in Hindi or English, and I will execute it directly.\n• 📄 **Executive Documents:** Ask for any PDF, brief, or document—compiled with clean typography.\n• 🌐 **Instant Websites:** Build web apps, landing pages, or tools—deployed to live preview and Canvas Studio.\n• 💻 **Code Execution:** Test or debug Python/Node scripts in an isolated sandbox.\n• 🔍 **Live Intelligence:** Deep-scrape web documentation and search live market breakthroughs.\n\nType \`/brief\` for a live briefing, \`/share\` to invite collaborators, or \`/clear\` to reset session context.`
+    );
+    return;
+  }
+
+  if (/^\/clear$/i.test(cleanInput)) {
+    telegramHistories[chatId] = [];
+    await sendTelegramTextMessage(
+      chatId,
+      `🧹 **Session Context Cleared!**\n\nFresh conversation started. Past long-term vector memories in Neon DB remain permanently preserved.`
+    );
+    return;
+  }
+
+  if (/^\/canvas$/i.test(cleanInput)) {
+    try {
+      const files = fs.readdirSync(PREVIEWS_DIR).filter(f => f.endsWith('.html')).slice(-5);
+      if (!files.length) {
+        await sendTelegramTextMessage(chatId, `🌐 No web previews deployed yet. Ask me to build a website or portfolio to create one!`);
+        return;
+      }
+      const list = files.map(f => {
+        const id = f.replace('.html', '');
+        return `• [${id}](${SELF_URL}/preview/${id}) — [Open Canvas Studio](${SELF_URL}/canvas/${id})`;
+      }).join('\n');
+      await sendTelegramTextMessage(chatId, `🌐 **Recent Live Canvas Builds:**\n\n${list}\n\n_Click any link to inspect in Canvas Studio!_`);
+      return;
+    } catch (_) {}
+  }
+
   if (/^\/(share|code|passcode)$/i.test(cleanInput)) {
     await sendTelegramTextMessage(
       chatId,
@@ -1349,6 +1383,7 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
 
   let userText = msg.text || msg.caption || '';
   let imagePart = null;
+  let audioPart = null;
 
   let uploadedPhotoBuffer = null;
 
@@ -1378,7 +1413,33 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     }
   }
 
-  if (!userText && !imagePart) return;
+  // 1b. TELEGRAM AUDIO / VOICE NOTE HANDLING (VOICE-TO-FRIDAY)
+  if (msg.voice || msg.audio) {
+    try {
+      const audioObj = msg.voice || msg.audio;
+      const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/getFile?file_id=${audioObj.file_id}`);
+      const fileData = await fileRes.json();
+      if (fileData.ok && fileData.result?.file_path) {
+        const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_KEY}/${fileData.result.file_path}`;
+        const audioBuffer = await (await fetch(fileUrl)).arrayBuffer();
+        const base64Audio = Buffer.from(audioBuffer).toString('base64');
+        const mimeType = msg.voice ? 'audio/ogg' : (audioObj.mime_type || 'audio/mp3');
+        audioPart = {
+          inline_data: {
+            mime_type: mimeType,
+            data: base64Audio
+          }
+        };
+        if (!userText) {
+          userText = "Listen to this audio note from Ajay carefully. Understand what he is saying/asking in English or Hindi/Hinglish, and execute his request directly.";
+        }
+      }
+    } catch (audioErr) {
+      console.error('[Telegram Audio Error]:', audioErr.message);
+    }
+  }
+
+  if (!userText && !imagePart && !audioPart) return;
 
   // 2. Keep "typing..." active continuously every 2.5 seconds
   const typingInterval = setInterval(async () => {
@@ -1411,7 +1472,7 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     if (!telegramHistories[chatId]) telegramHistories[chatId] = [];
     const prevTurn = telegramHistories[chatId].slice(-2)[0]?.content || '';
     
-    telegramHistories[chatId].push({ role: 'user', content: userText, imagePart });
+    telegramHistories[chatId].push({ role: 'user', content: userText, imagePart, audioPart });
     if (telegramHistories[chatId].length > 16) {
       telegramHistories[chatId] = telegramHistories[chatId].slice(-16);
     }
@@ -1551,9 +1612,33 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   }
 });
 
+// ── REGISTER TELEGRAM BOT COMMANDS MENU ───────────────────────────────────────
+async function registerTelegramCommands() {
+  if (!TELEGRAM_KEY) return;
+  try {
+    const commands = [
+      { command: 'start', description: 'Operational status & capabilities overview' },
+      { command: 'brief', description: 'Trigger on-demand executive intelligence brief' },
+      { command: 'canvas', description: 'Browse recent live website builds' },
+      { command: 'share', description: 'View invite passcode to share with friends' },
+      { command: 'users', description: 'List authorized users with access' },
+      { command: 'clear', description: 'Reset active chat memory for a fresh session' }
+    ];
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands })
+    });
+    console.log('>> [Telegram] Native bot commands menu registered successfully');
+  } catch (err) {
+    console.error('[setMyCommands Error]:', err.message);
+  }
+}
+
 // ── START SERVER ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
+  registerTelegramCommands();
   console.log(`==================================================`);
   console.log(`>> RIYA AI CORE ONLINE ON PORT ${PORT}`);
   console.log(`>> GEMINI API: ${GEMINI_KEY ? 'Active' : 'Missing'}`);

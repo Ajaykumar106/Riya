@@ -526,6 +526,7 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
     const parts = [];
     if (m.content) parts.push({ text: m.content });
     if (m.imagePart) parts.push(m.imagePart);
+    if (m.audioPart) parts.push(m.audioPart);
     contents.push({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: parts.length ? parts : [{ text: '' }]
