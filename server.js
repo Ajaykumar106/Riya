@@ -22,6 +22,22 @@ setInterval(() => {
 app.get('/ping', (req, res) => res.json({ alive: true, model: GEMINI_MODEL, t: Date.now() }));
 app.get('/healthz', (req, res) => res.json({ status: 'healthy', t: Date.now() }));
 
+app.get('/api/test-gemini', async (req, res) => {
+  const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleanKey) return res.json({ error: 'GEMINI_API_KEY is missing in Render Environment Variables' });
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+    const listData = await listRes.json();
+    res.json({
+      keyPrefix: cleanKey.slice(0, 6) + '...' + cleanKey.slice(-4),
+      keyLength: cleanKey.length,
+      googleResponse: listData
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 // ── PERSISTENT MEMORY ─────────────────────────────────────────────────────────
 const MEMORY_FILE = path.join(__dirname, 'memory.json');
 
@@ -115,7 +131,8 @@ ${modeMap[mood] || modeMap.normal}
 
 // ── CORE GEMINI CALL (BULLETPROOF MULTI-MODEL FALLBACK) ───────────────────────
 async function callGemini(sysPrompt, messagesList) {
-  if (!GEMINI_KEY) {
+  const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleanKey) {
     return "Joya Protocol active. Please configure GEMINI_API_KEY in your environment variables.";
   }
 
@@ -165,7 +182,7 @@ async function callGemini(sysPrompt, messagesList) {
   for (const model of modelsToTry) {
     for (const att of attempts) {
       try {
-        const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${GEMINI_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${cleanKey}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
