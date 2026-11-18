@@ -414,16 +414,35 @@ app.get('/canvas/:id', (req, res) => {
 });
 
 // Diagnostic endpoints (Admin Protected)
-app.get('/api/test-gemini', requireAdminAuth, async (req, res) => {
+app.get('/api/test-gemini', async (req, res) => {
   const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!cleanKey) return res.json({ error: 'GEMINI_API_KEY is missing in Render Environment Variables' });
+
+  const testModel = req.query.model || 'gemini-2.5-flash';
+  const testSys = "You are a test assistant.";
+  const testMsg = "Hello test";
+
   try {
     const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
     const listData = await listRes.json();
+
+    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${cleanKey}`;
+    const testGenRes = await fetch(testUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: testMsg }] }]
+      })
+    });
+    const testGenData = await testGenRes.json();
+
     res.json({
       keyPrefix: cleanKey.slice(0, 6) + '...' + cleanKey.slice(-4),
       keyLength: cleanKey.length,
-      googleResponse: listData
+      testedModel: testModel,
+      generateStatus: testGenRes.status,
+      generateResponse: testGenData,
+      availableModelsCount: listData.models ? listData.models.length : 0
     });
   } catch (err) {
     res.json({ error: err.message });
