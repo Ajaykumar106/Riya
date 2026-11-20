@@ -1115,11 +1115,11 @@ async function callOpenAICompatible({ endpoint, apiKey, model, sysPrompt, messag
 }
 
 // ── DETECT WHETHER QUERY REQUIRES LIVE SEARCH OR VISION ─────────────────────
-function isSearchOrMediaRequest(messagesList, sysPrompt) {
+function isSearchOrMediaRequest(messagesList) {
   if (!messagesList || !messagesList.length) return false;
   if (messagesList.some(m => m.imagePart || m.audioPart)) return true;
 
-  const combinedText = (messagesList.map(m => m.content || '').join(' ') + ' ' + (sysPrompt || '')).toLowerCase();
+  const combinedText = messagesList.map(m => m.content || '').join(' ').toLowerCase();
   const searchTriggers = [
     'search the web', 'google search', 'live search', 'latest news', 'aaj ki khabar',
     'breaking news', 'current weather', 'stock price', 'crypto price', 'live score',
@@ -1788,7 +1788,15 @@ app.post('/api/chat', async (req, res) => {
       PREVIEWS_DIR,
       SELF_URL
     };
-    const agentRes = await callGeminiAgent(sys, hist, agentCtx, callGemini);
+
+    const needsSearchOrVision = isSearchOrMediaRequest(hist);
+    let agentRes = { text: '' };
+    if (!needsSearchOrVision && (GROQ_KEY || OPENROUTER_KEY)) {
+      const textRes = await callGemini(sys, hist);
+      agentRes = { text: textRes };
+    } else {
+      agentRes = await callGeminiAgent(sys, hist, agentCtx, callGemini);
+    }
     let finalAnswer = agentRes.text;
 
     // Autonomous ReAct Sandbox Execution if task involves running code
@@ -2478,7 +2486,15 @@ Output an Executive Briefing in clean Markdown.`;
       PREVIEWS_DIR,
       SELF_URL
     };
-    const agentRes = await callGeminiAgent(sys, telegramHistories[chatId], agentCtx, callGemini);
+
+    const needsSearchOrVision = isSearchOrMediaRequest(telegramHistories[chatId]);
+    let agentRes = { text: '' };
+    if (!needsSearchOrVision && (GROQ_KEY || OPENROUTER_KEY)) {
+      const textRes = await callGemini(sys, telegramHistories[chatId]);
+      agentRes = { text: textRes };
+    } else {
+      agentRes = await callGeminiAgent(sys, telegramHistories[chatId], agentCtx, callGemini);
+    }
     const reply = agentRes.text;
     telegramHistories[chatId].push({ role: 'assistant', content: reply });
 
