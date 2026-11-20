@@ -234,12 +234,13 @@ app.get('/api/models', (req, res) => {
       },
       openrouter: {
         configured: Boolean(openRouterClean),
-        role: "Universal Frontier Multi-Model & Open-Weights Fallback",
+        role: "Universal Frontier Multi-Model & Quota Preserver Engine",
         models: [
-          process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1:free',
-          'meta-llama/llama-3.3-70b-instruct:free',
-          'qwen/qwen-2.5-72b-instruct:free',
-          'google/gemini-2.0-flash-exp:free'
+          process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+          'deepseek/deepseek-chat',
+          'qwen/qwen-2.5-72b-instruct',
+          'meta-llama/llama-3.1-8b-instruct',
+          'mistralai/mistral-small-24b-instruct-2501'
         ]
       },
       localLlm: {
@@ -608,7 +609,7 @@ app.get('/api/test-openrouter', async (req, res) => {
   const cleanKey = (OPENROUTER_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!cleanKey) return res.json({ error: 'OPENROUTER_API_KEY is missing in Render Environment Variables' });
 
-  const testModel = req.query.model || process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+  const testModel = req.query.model || process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct';
   try {
     const testRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -629,6 +630,17 @@ app.get('/api/test-openrouter', async (req, res) => {
       testedModel: testModel,
       response: testData
     });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
+app.get('/api/telegram-commands', async (req, res) => {
+  if (!TELEGRAM_KEY) return res.json({ error: 'TELEGRAM_BOT_TOKEN missing' });
+  try {
+    const fetchRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/getMyCommands`);
+    const data = await fetchRes.json();
+    res.json(data);
   } catch (err) {
     res.json({ error: err.message });
   }
@@ -1162,13 +1174,11 @@ async function callGemini(sysPrompt, messagesList) {
     if (cleanOpenRouterKey) {
       const openRouterModels = [
         process.env.OPENROUTER_MODEL,
-        'meta-llama/llama-3.3-70b-instruct:free',
-        'deepseek/deepseek-r1:free',
-        'deepseek/deepseek-chat:free',
-        'qwen/qwen-2.5-72b-instruct:free',
-        'google/gemini-2.0-flash-exp:free',
-        'meta-llama/llama-3.1-8b-instruct:free',
-        'mistralai/mistral-7b-instruct:free'
+        'meta-llama/llama-3.3-70b-instruct',
+        'deepseek/deepseek-chat',
+        'qwen/qwen-2.5-72b-instruct',
+        'meta-llama/llama-3.1-8b-instruct',
+        'mistralai/mistral-small-24b-instruct-2501'
       ].filter(Boolean);
 
       for (const oModel of openRouterModels) {
@@ -1305,17 +1315,15 @@ async function callGemini(sysPrompt, messagesList) {
     }
   }
 
-  // 4. TERTIARY TIER: OPENROUTER (FREE TIER FRONTIER & OPEN-WEIGHTS)
+  // 4. TERTIARY TIER: OPENROUTER (ROBUST MULTI-MODEL FALLBACK)
   if (cleanOpenRouterKey) {
     const openRouterModels = [
       process.env.OPENROUTER_MODEL,
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'deepseek/deepseek-r1:free',
-      'deepseek/deepseek-chat:free',
-      'qwen/qwen-2.5-72b-instruct:free',
-      'google/gemini-2.0-flash-exp:free',
-      'meta-llama/llama-3.1-8b-instruct:free',
-      'mistralai/mistral-7b-instruct:free'
+      'meta-llama/llama-3.3-70b-instruct',
+      'deepseek/deepseek-chat',
+      'qwen/qwen-2.5-72b-instruct',
+      'meta-llama/llama-3.1-8b-instruct',
+      'mistralai/mistral-small-24b-instruct-2501'
     ].filter(Boolean);
 
     for (const oModel of openRouterModels) {
