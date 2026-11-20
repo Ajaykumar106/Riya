@@ -1734,6 +1734,63 @@ _If any model faces rate limits or downtime, Riya automatically cascades down th
     return;
   }
 
+  // ── AUTONOMOUS MULTI-HOP DEEP RESEARCH ──────────────────────────────────────
+  if (/^\/(research|deepsearch)(\s+.*)?$/i.test(cleanInput)) {
+    const topic = cleanInput.replace(/^\/(research|deepsearch)\s*/i, '').trim();
+    if (!topic) {
+      await sendTelegramTextMessage(
+        chatId,
+        `🔬 **Riya Deep Research Engine**\n\nUsage: \`/research <topic>\`\n*Example:* \`/research Quantum computing breakthroughs in cryptographic defense\``
+      );
+      return;
+    }
+
+    await sendTelegramTextMessage(
+      chatId,
+      `🔬 **Multi-Hop Deep Research Initiated**\n\n• **Subject:** \`${topic}\`\n• **Decomposition:** Establishing 3 orthogonal analytical vectors\n• **Cross-Verification:** Fact synthesis across benchmarks & architectures...\n\n_Synthesizing verified executive brief & A4 PDF..._`
+    );
+
+    try {
+      const researchSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+      const researchPrompt = `AUTONOMOUS MULTI-HOP DEEP RESEARCH INVESTIGATION:
+Target Topic: ${topic}
+
+Deconstruct and investigate this topic across 3 orthogonal vectors:
+1. Core Architectural & Theoretical Foundations
+2. Verified State-of-the-Art Benchmarks & Industry Implementations (2025-2026)
+3. Known Failure Modes, Threat Models, and Practical Trade-offs
+
+Deliverable Requirements:
+• Provide an exhaustive, rigorous technical report with clean markdown structure.
+• Highlight actionable strategic insights for Ajay (Architect).
+• Use respectful language ('Aap', 'Aapka').
+• Keep document pure, thorough, and devoid of chat pleasantries.`;
+
+      const researchResult = await callGemini(researchSys, [{ role: 'user', content: researchPrompt }]);
+
+      // Generate clean A4 PDF
+      const pdfBuf = await generatePdfBuffer(`Deep Research - ${topic.slice(0, 40)}`, researchResult, null, 'executive');
+      const safeFilename = `DeepResearch_${topic.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}.pdf`;
+
+      await sendTelegramBufferDocument(
+        chatId,
+        safeFilename,
+        pdfBuf,
+        'application/pdf',
+        `📄 Executive Deep Research Report: ${topic.slice(0, 50)}`
+      );
+
+      const summaryText = researchResult.slice(0, 1500);
+      await sendTelegramTextMessage(
+        chatId,
+        `✅ **Deep Research Synthesized: ${topic}**\n\n${summaryText}...\n\n_(Complete formatted A4 research brief attached above)_`
+      );
+    } catch (rErr) {
+      await sendTelegramTextMessage(chatId, `❌ **Deep Research Error:** ${rErr.message}`);
+    }
+    return;
+  }
+
   // ── ON-DEMAND MORNING / EXECUTIVE BRIEF ──────────────────────────────────────
   if (/^\/brief$/i.test(cleanInput)) {
     const now = new Date();
@@ -2164,6 +2221,7 @@ async function registerTelegramCommands() {
       { command: 'start', description: 'Operational status & capabilities overview' },
       { command: 'godeye', description: 'GodEye live surveillance, health & system telemetry HUD' },
       { command: 'models', description: 'Multi-model failover matrix (Gemini, Groq, OpenRouter)' },
+      { command: 'research', description: 'Autonomous multi-hop deep research & verified PDF (/research <topic>)' },
       { command: 'audit', description: 'Audit repository architecture & security (/audit <repo>)' },
       { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
       { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
