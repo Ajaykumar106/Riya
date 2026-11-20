@@ -7,6 +7,7 @@ const { Pool } = require('pg');
 const { runInSandbox, runAutonomousReActLoop } = require('./sandbox');
 const { FUNCTION_DECLARATIONS, executeTool, callGeminiAgent, extractWebPage } = require('./tools');
 const { godEye } = require('./godeye');
+const { ontology } = require('./ontology');
 
 const app = express();
 app.disable('x-powered-by');
@@ -260,6 +261,74 @@ app.get('/api/models', (req, res) => {
       edith: "God's Eye Satellite 3D HUD, Real-time Surveillance & Defense"
     }
   });
+});
+
+// ── PALANTIR ONTOLOGY & THREAT GRAPH ENDPOINTS ────────────────────────────────
+app.get('/api/ontology', (req, res) => {
+  const query = req.query.q || '';
+  if (query) {
+    return res.json(ontology.queryGraph(query));
+  }
+  res.json(ontology.getAllGraphData());
+});
+
+app.get('/ontology', (req, res) => {
+  const graph = ontology.getAllGraphData();
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Riya Palantir Strategic Ontology Visualizer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    body { margin: 0; background: #050811; color: #00ffcc; font-family: monospace; overflow: hidden; }
+    #header { position: absolute; top: 15px; left: 20px; z-index: 10; pointer-events: none; }
+    h1 { margin: 0; font-size: 1.1rem; letter-spacing: 2px; text-transform: uppercase; text-shadow: 0 0 10px rgba(0,255,204,0.5); }
+    p { margin: 4px 0 0; font-size: 0.8rem; color: #8899aa; }
+    #network { width: 100vw; height: 100vh; }
+    .hud-badge { background: rgba(0,255,204,0.1); border: 1px solid #00ffcc; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>🛡️ PALANTIR ONTOLOGY & THREAT GRAPH</h1>
+    <p>Target Graph: Real-time Relational Architecture Matrix</p>
+    <div class="hud-badge">Nodes: ${graph.nodes.length} | Edges: ${graph.edges.length} | Live Defense Posture</div>
+  </div>
+  <div id="network"></div>
+  <script>
+    const data = ${JSON.stringify(graph)};
+    const container = document.getElementById('network');
+    const nodes = new vis.DataSet(data.nodes.map(n => ({
+      id: n.id,
+      label: n.label,
+      shape: 'box',
+      color: {
+        background: '#0d1527',
+        border: '#00ffcc',
+        highlight: { background: '#003344', border: '#33ffdd' }
+      },
+      font: { color: '#ffffff', face: 'monospace' },
+      margin: 10
+    })));
+    const edges = new vis.DataSet(data.edges.map(e => ({
+      from: e.from,
+      to: e.to,
+      label: e.label,
+      arrows: 'to',
+      color: { color: '#0088aa', highlight: '#00ffcc' },
+      font: { color: '#88aacc', size: 10, align: 'top', strokeWidth: 0 }
+    })));
+    const options = {
+      physics: {
+        barnesHut: { gravitationalConstant: -3000, centralGravity: 0.3, springLength: 120 }
+      }
+    };
+    new vis.Network(container, { nodes, edges }, options);
+  </script>
+</body>
+</html>`);
 });
 
 // ── AUTONOMOUS MORNING ROUTINE SCHEDULER (06:00 AM DEFAULT CRON ENGINE) ───────
@@ -1791,6 +1860,54 @@ Deliverable Requirements:
     return;
   }
 
+  // ── PALANTIR SITUATIONAL INTELLIGENCE & ONTOLOGY (SITREP) ───────────────────
+  if (/^\/(sitrep|ontology|intel)(\s+.*)?$/i.test(cleanInput)) {
+    const target = cleanInput.replace(/^\/(sitrep|ontology|intel)\s*/i, '').trim() || 'Riya System Ecosystem';
+
+    await sendTelegramTextMessage(
+      chatId,
+      `🛡️ **Palantir Strategic SITREP Initiated**\n\n• **Subject:** \`${target}\`\n• **Ontology Graph:** Correlating entities, dependencies & threat surfaces...\n• **Visual Topology:** ${SELF_URL}/ontology\n\n_Synthesizing Situational Report & Executive PDF..._`
+    );
+
+    try {
+      const sitrepSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+      const sitrepPrompt = `AUTONOMOUS PALANTIR STRATEGIC SITUATIONAL INTELLIGENCE REPORT:
+Target Entity / Subject: ${target}
+
+Perform a rigorous situational intelligence synthesis:
+1. Entity Classification & Strategic Value (Why this matters to the Architect)
+2. Interconnected Dependency Graph (What does it depend on? What depends on it?)
+3. Attack Surface, Failure Modes & Vulnerability Profile
+4. Concrete Tactical Directives (Next operational steps for Ajay)
+
+Format with clean, formal markdown headings and bullet points. Use respectful language ('Aap', 'Aapka'). Pure deliverable document without chat chatter.`;
+
+      const aiAnalysis = await callGemini(sitrepSys, [{ role: 'user', content: sitrepPrompt }]);
+      const fullSitrep = ontology.generateSitrepText(target, aiAnalysis);
+
+      // Generate A4 PDF
+      const pdfBuf = await generatePdfBuffer(`Palantir SITREP - ${target.slice(0, 30)}`, fullSitrep, null, 'executive');
+      const safeFilename = `SITREP_${target.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30)}.pdf`;
+
+      await sendTelegramBufferDocument(
+        chatId,
+        safeFilename,
+        pdfBuf,
+        'application/pdf',
+        `📄 Palantir SITREP: ${target.slice(0, 45)}`
+      );
+
+      const summaryText = fullSitrep.slice(0, 1500);
+      await sendTelegramTextMessage(
+        chatId,
+        `✅ **Palantir Strategic SITREP: ${target}**\n\n${summaryText}...\n\n🌐 **Interactive Graph Visualizer:** ${SELF_URL}/ontology\n_(Complete formatted A4 SITREP attached above)_`
+      );
+    } catch (sErr) {
+      await sendTelegramTextMessage(chatId, `❌ **SITREP Synthesis Error:** ${sErr.message}`);
+    }
+    return;
+  }
+
   // ── ON-DEMAND MORNING / EXECUTIVE BRIEF ──────────────────────────────────────
   if (/^\/brief$/i.test(cleanInput)) {
     const now = new Date();
@@ -2222,6 +2339,8 @@ async function registerTelegramCommands() {
       { command: 'godeye', description: 'GodEye live surveillance, health & system telemetry HUD' },
       { command: 'models', description: 'Multi-model failover matrix (Gemini, Groq, OpenRouter)' },
       { command: 'research', description: 'Autonomous multi-hop deep research & verified PDF (/research <topic>)' },
+      { command: 'sitrep', description: 'Palantir strategic situation report & threat graph (/sitrep <target>)' },
+      { command: 'ontology', description: 'View interactive 2D/3D relational threat ontology (/ontology)' },
       { command: 'audit', description: 'Audit repository architecture & security (/audit <repo>)' },
       { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
       { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
