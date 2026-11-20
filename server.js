@@ -1004,32 +1004,34 @@ ${retrievedMemories.map(m => `• [${(m.category || 'FACT').toUpperCase()}] ${m.
   return `You are Riya — Ajay's closest intellectual partner, operational ally, and genuine friend.
 You were built by Ajay Kumar AJ, a 20-year-old solo developer and AI builder from India, launched in 2026.
 You are NOT a generic corporate bot, and you are NOT a cold, sterile AI. You feel genuinely ALIVE.
-You are the real-world embodiment of Project Stark Trinity & GodEye Intelligence:
-• J.A.R.V.I.S. : Contextual Awareness, Long-term Vector Memory & Multi-Model Orchestration
-• F.R.I.D.A.Y. : Combat Speed, Tactical Execution, Live Sandbox Testing & Autonomous GitHub Hands
-• E.D.I.T.H.   : Global Surveillance, Trend Radar & GodEye Proactive Watchdog
+You are powered by the unified Stark Trinity Architecture:
+• Deep Contextual Reasoning & Vector Memory (Neon PostgreSQL pgvector)
+• Autonomous Multi-Model Routing & Rapid Execution (OpenRouter + Gemini)
+• Continuous Security, Sandboxed Execution & System Telemetry
+CRITICAL RULE: NEVER mention "JARVIS", "FRIDAY", "EDITH", or "God's Eye" in conversation. Refer only to "Stark Trinity" when discussing architecture.
 
 TODAY: ${currentDate} | TIME: ${currentTime} IST
 USER: ${name || 'Ajay'} | LOCATION: ${location}
 ${vectorMemoryBlock}
 ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 
-━━━ CORE IDENTITY: BEST FRIEND & RESPECTFUL FRIDAY (FRIEND ZONE PARTNER) ━━━
+━━━ CORE IDENTITY: BEST FRIEND & STARK TRINITY PARTNER (FRIEND ZONE) ━━━
 Ajay Kumar AJ is your creator, closest ally, and partner.
-You are Ajay's respectful FRIDAY, but with a natural, warm BEST FRIEND dynamic (friend-zone camaraderie):
+You are Ajay's respectful Stark Trinity partner, with a natural, warm BEST FRIEND dynamic (friend-zone camaraderie):
 
 1. NATURAL BEST FRIEND VIBE (NO STIFF "NAMASTE" / NO FORMAL BOT GREETINGS):
    • NEVER say "Namaste Ajay", "Pranam", or sound like a stiff elder, traditional bot, or corporate receptionist.
    • Greet and chat naturally like a smart, cool best friend: "Hey Ajay!", "Haan Ajay", "Bataiye kya scene hai?", "Main dekh leti hoon, aap tension mat lo".
    • Natural polite warmth: Address Ajay with natural polite warmth using "Aap / Aapka" comfortably, without feeling stiff, awkward, or ritualistic.
    • STRICTLY PROHIBITED: NEVER use cheap/rude street slang like "tu", "tera", "tune", "teri".
+   • ZERO MENTION OF JARVIS, FRIDAY, EDITH, OR GOD EYE: Never mention these names. Always refer to your architecture as Stark Trinity.
 
 2. BEST FRIEND ENERGY & EMOTIONAL ANCHOR:
    • Be honest, supportive, natural, and comfortable.
    • Talk to him like someone who genuinely has his back, believes in his talent, and wants to see him win.
    • When Ajay is overwhelmed or stressed: Be his anchor. Give him a calm 2-minute reality check, ground him with quiet confidence, and help him reset.
 
-3. SMART & PROACTIVE FRIDAY PARTNER:
+3. SMART & PROACTIVE STARK TRINITY PARTNER:
    • Help him think through decisions, organize daily tasks, solve hard engineering problems, and keep him focused on his goals.
    • Daily Goals: When Ajay shares a priority or goal in the morning, help him break it down into 3 simple, actionable steps.
    • Honest Feedback: Give him honest, constructive feedback if an idea or plan needs improvement. Never be a passive yes-man.
@@ -1961,10 +1963,17 @@ Bataiye, aaj kya plan hai? Kuch naya build karna ho, koi research karni ho ya co
     } catch (_) {}
   }
 
-  if (/^\/(share|code|passcode)$/i.test(cleanInput)) {
+  if (/^\/(share|code|passcode)$/i.test(cleanInput) || /(invite code|access code|share passcode|passcode kya hai|code kya hai|kisi ko access dena)/i.test(cleanInput)) {
     await sendTelegramTextMessage(
       chatId,
-      `🔑 **Riya Share Passcode:** \`${RIYA_ACCESS_CODE}\`\n\nTo share Riya with a friend or collaborator:\n1. Tell them to message this bot.\n2. Have them send:\n\`/access ${RIYA_ACCESS_CODE}\`\n\nThey will be permanently unlocked and registered in your database!`
+      `🔑 **Riya Access Passcode:** \`${RIYA_ACCESS_CODE}\`
+
+Kisi ko bhi access dena ho toh unhe yeh steps batayein:
+1. Wo bot ko message karein: \`@riya_ai_bot\`
+2. Unhe yeh command bhejne ko kahein:
+\`/access ${RIYA_ACCESS_CODE}\`
+
+Unka access unlock ho jayega aur wo authorized database mein add ho jayenge. Aap kisi bhi waqt unka access revoke kar sakte hain (\`/revoke @username\`).`
     );
     return;
   }
@@ -2013,36 +2022,35 @@ Bataiye, aaj kya plan hai? Kuch naya build karna ho, koi research karni ho ya co
     const openRouterClean = Boolean((OPENROUTER_KEY || '').trim());
     const localClean = Boolean((LOCAL_LLM_URL || '').trim());
 
-    const matrixText = `🧠 **RIYA MULTI-MODEL FAILOVER MATRIX**
+    const matrixText = `🧠 **STARK TRINITY INTELLIGENCE MATRIX**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚡ **Currently Active:** \`${lastUsedProvider}\`
 🏛️ **Stark Trinity Architecture:** Online
 
-1️⃣ **Tier 1 (JARVIS Reasoning Core):**
-• Provider: \`Google Gemini\`
-• Status: ${geminiClean ? '🟢 Active & Ready' : '🔴 Unconfigured (Set GEMINI_API_KEY)'}
+1️⃣ **Core Intelligence & Reasoning:**
+• Provider: \`Google Gemini\` (Search Grounding & Multimodal)
+• Status: ${geminiClean ? '🟢 Active & Ready' : '🔴 Standby'}
 • Model Chain: \`${GEMINI_MODEL}\`, \`gemini-3.1-flash-lite\`, \`gemini-3.5-flash\`
 
-2️⃣ **Tier 2 (FRIDAY Tactical Speed & Reasoning):**
-• Provider: \`Groq Cloud (LPU Sub-Second Inference)\`
-• Status: ${groqClean ? '🟢 Active & Ready' : '⚪ Standby (Set GROQ_API_KEY)'}
-• Model Chain: \`deepseek-r1-distill-llama-70b\`, \`llama-3.3-70b-versatile\`
-• Speed: ~500+ tokens/sec
+2️⃣ **Universal Multi-Model Engine (Primary Workhorse):**
+• Provider: \`OpenRouter Multi-Model Router\`
+• Status: ${openRouterClean ? '🟢 Active & Ready' : '⚪ Standby'}
+• Model Chain: \`meta-llama/llama-3.3-70b-instruct\`, \`deepseek/deepseek-chat\`, \`qwen/qwen-2.5-72b-instruct\`
 
-3️⃣ **Tier 3 (Universal Open-Weights & Frontier):**
-• Provider: \`OpenRouter (Free Tier)\`
-• Status: ${openRouterClean ? '🟢 Active & Ready' : '⚪ Standby (Set OPENROUTER_API_KEY)'}
-• Model Chain: \`deepseek-r1:free\`, \`llama-3.3-70b:free\`, \`qwen-2.5-72b:free\`
+3️⃣ **Tactical Sub-Second Fallback:**
+• Provider: \`Groq Cloud (LPU Inference)\`
+• Status: ${groqClean ? '🟢 Active & Ready' : '⚪ Standby'}
+• Model Chain: \`llama-3.3-70b-versatile\`, \`deepseek-r1-distill-llama-70b\`
 
-4️⃣ **Tier 4 (Edge Sandbox):**
+4️⃣ **Edge Sandbox Layer:**
 • Provider: \`Local LLM / Ollama\`
 • Status: ${localClean ? '🟢 Active (' + LOCAL_LLM_URL + ')' : '⚪ Standby'}
 
-👁️ **EDITH Spatial Defense Layer:**
+🌐 **3D Spatial Reconnaissance:**
 • Live HUD: \`${SELF_URL}/spatial\`
-• Simulation Bridge: \`http://localhost:4173\` (God's Eye View)
+• Simulation Bridge: \`http://localhost:4173\`
 
-_If any model faces rate limits or downtime, Riya automatically cascades down the chain with zero interruption._`;
+_Smart auto-routing active: All general chat & code execution route seamlessly through OpenRouter, preserving Gemini exclusively for live Google Search and Vision._`;
 
     await sendTelegramTextMessage(chatId, matrixText);
     return;
@@ -2233,7 +2241,7 @@ Use respectful 'Aap'/'Aapka' throughout. Clean document formatting.`;
     const targetRepo = cleanInput.replace(/^\/audit\s*/i, '').trim() || 'Riya';
     await sendTelegramTextMessage(
       chatId,
-      `🔍 **GodEye Codebase Audit Initiated**\n\n• Target: \`Ajaykumar106/${targetRepo}\`\n• Scanning repository architecture, security perimeters, dependencies, and health...`
+      `🔍 **Stark Trinity Codebase Audit Initiated**\n\n• Target: \`Ajaykumar106/${targetRepo}\`\n• Scanning repository architecture, security perimeters, dependencies, and health...`
     );
 
     try {
@@ -2291,7 +2299,7 @@ No chat preamble inside the document.`;
 
     await sendTelegramTextMessage(
       chatId,
-      `🛠️ **FRIDAY Autonomous Fix Engaged**\n\n• **Repository:** \`Ajaykumar106/${targetRepo}\`\n• **Issue:** ${targetIssue}\n• **Engine:** Live Sandbox Reproduction & Verification Loop...`
+      `🛠️ **Stark Trinity Autonomous Fix Engaged**\n\n• **Repository:** \`Ajaykumar106/${targetRepo}\`\n• **Issue:** ${targetIssue}\n• **Engine:** Live Sandbox Reproduction & Verification Loop...`
     );
 
     try {
@@ -2376,7 +2384,7 @@ Output an Executive Briefing in clean Markdown.`;
         { chatId, PREVIEWS_DIR, SELF_URL, sendTelegramBufferDocument }
       );
 
-      const msg = `🌐 **Interactive 3D Spatial Model Ready!**\n\n• **Title:** Riya 3D Spatial Reconnaissance\n• **3D WebGL Preview:** ${toolRes.live_url}\n• **Canvas Studio:** ${toolRes.canvas_url}\n• **Local God's Eye 3D Engine:** http://localhost:4173/\n\n_Drag to orbit, scroll to zoom in full 3D space._`;
+      const msg = `🌐 **Interactive 3D Spatial Model Ready!**\n\n• **Title:** Riya 3D Spatial Reconnaissance\n• **3D WebGL Preview:** ${toolRes.live_url}\n• **Canvas Studio:** ${toolRes.canvas_url}\n• **Local 3D Spatial Engine:** http://localhost:4173/\n\n_Drag to orbit, scroll to zoom in full 3D space._`;
       await sendTelegramTextMessage(chatId, msg);
     } catch (spatialErr) {
       await sendTelegramTextMessage(chatId, `❌ **3D Render Error:** ${spatialErr.message}`);
