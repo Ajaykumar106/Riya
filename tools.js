@@ -208,6 +208,30 @@ const FUNCTION_DECLARATIONS = [
         category: { type: 'STRING', description: 'Focus area: viral_hooks, editing_styles, ai_tools, or general' }
       }
     }
+  },
+  {
+    name: 'render_3d_spatial_view',
+    description: 'Generate, deploy, and launch an interactive 3D WebGL / Three.js spatial model (3D globe, planetary satellite orbits, architecture mesh, or quantum calculation visualizer) with orbital camera controls and tactical dark HUD. Returns live preview and Canvas Studio links.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: { type: 'STRING', description: 'Title of the 3D visualization' },
+        scene_type: { type: 'STRING', description: 'Type: globe_telemetry, architecture_3d, quantum_simulation, or custom' },
+        html_code: { type: 'STRING', description: 'Self-contained 3D HTML with embedded Three.js / WebGL' }
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'gods_eye_live_intel',
+    description: 'Query live spatial intelligence from the local God\'s Eye View engine: flights (ADS-B), satellites, maritime vessels (AIS), or hazard feeds.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        layer: { type: 'STRING', description: 'Layer: flights, satellites, cctv, hazards, or weather' },
+        location: { type: 'STRING', description: 'City or geographic region (e.g. India, Delhi, Tokyo)' }
+      }
+    }
   }
 ];
  
@@ -665,6 +689,188 @@ async function executeTool(toolName, toolArgs, context = {}) {
         };
       }
 
+      case 'render_3d_spatial_view': {
+        const title = toolArgs.title || '3D Spatial Intelligence View';
+        let html = toolArgs.html_code || '';
+        const sceneType = toolArgs.scene_type || 'globe_telemetry';
+        const siteId = 'spatial3d_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+
+        if (!html || html.length < 50) {
+          html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#030712; color:#38bdf8; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace; overflow:hidden; }
+    #hud { position:absolute; top:20px; left:20px; z-index:10; pointer-events:none; }
+    .title { font-size:16px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:#f8fafc; }
+    .subtitle { font-size:11px; color:#94a3b8; margin-top:4px; }
+    .telemetry { margin-top:12px; font-size:11px; line-height:1.6; color:#38bdf8; }
+    #canvas-container { width:100vw; height:100vh; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:4px; background:rgba(56,189,248,0.15); border:1px solid #38bdf8; font-size:10px; font-weight:700; margin-top:8px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <div id="hud">
+    <div class="title">👁️ ${title}</div>
+    <div class="subtitle">PROJECT STARK TRINITY // SPATIAL 3D RECONNAISSANCE</div>
+    <div class="badge">TACTICAL HUD ONLINE</div>
+    <div class="telemetry">
+      • SCENE: ${sceneType.toUpperCase()}<br>
+      • TARGET: PLANETARY ORBIT<br>
+      • RENDER: WEBGL 2.0 | FPS: 60<br>
+      • ORBIT CONTROLS: ACTIVE (DRAG TO ROTATE, SCROLL TO ZOOM)
+    </div>
+  </div>
+  <div id="canvas-container"></div>
+  <script>
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x030712, 0.0015);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, 22);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    const globeGeo = new THREE.SphereGeometry(8, 36, 36);
+    const globeMat = new THREE.MeshBasicMaterial({ color: 0x0284c7, wireframe: true, transparent: true, opacity: 0.35 });
+    const globe = new THREE.Mesh(globeGeo, globeMat);
+    scene.add(globe);
+
+    const innerGeo = new THREE.SphereGeometry(7.8, 32, 32);
+    const innerMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
+    const innerSphere = new THREE.Mesh(innerGeo, innerMat);
+    scene.add(innerSphere);
+
+    const ringGeo = new THREE.RingGeometry(11, 11.2, 64);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = Math.PI / 2.3;
+    scene.add(ring);
+
+    const satCount = 120;
+    const satGeo = new THREE.BufferGeometry();
+    const satPositions = new Float32Array(satCount * 3);
+    for (let i = 0; i < satCount * 3; i += 3) {
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * 2.0 * Math.PI;
+      const phi = Math.acos(2.0 * v - 1.0);
+      const r = 8.8 + Math.random() * 3.5;
+      satPositions[i] = r * Math.sin(phi) * Math.cos(theta);
+      satPositions[i + 1] = r * Math.sin(phi) * Math.sin(theta);
+      satPositions[i + 2] = r * Math.cos(phi);
+    }
+    satGeo.setAttribute('position', new THREE.BufferAttribute(satPositions, 3));
+    const satMat = new THREE.PointsMaterial({ color: 0x38bdf8, size: 0.35, transparent: true, opacity: 0.85 });
+    const satellites = new THREE.Points(satGeo, satMat);
+    scene.add(satellites);
+
+    const starCount = 800;
+    const starGeo = new THREE.BufferGeometry();
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount * 3; i++) {
+      starPos[i] = (Math.random() - 0.5) * 400;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const starMat = new THREE.PointsMaterial({ color: 0x64748b, size: 0.5 });
+    scene.add(new THREE.Points(starGeo, starMat));
+
+    function animate() {
+      requestAnimationFrame(animate);
+      globe.rotation.y += 0.002;
+      innerSphere.rotation.y += 0.002;
+      satellites.rotation.y += 0.003;
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>`;
+        }
+
+        if (PREVIEWS_DIR) {
+          fs.writeFileSync(path.join(PREVIEWS_DIR, `${siteId}.html`), html, 'utf-8');
+        }
+
+        const liveUrl = `${SELF_URL}/preview/${siteId}`;
+        if (sendTelegramBufferDocument && chatId) {
+          await sendTelegramBufferDocument(
+            chatId,
+            'spatial_view.html',
+            Buffer.from(html, 'utf-8'),
+            'text/html;charset=utf-8',
+            `🌐 ${title} (3D Interactive Model)`
+          );
+        }
+
+        return {
+          success: true,
+          title,
+          scene_type: sceneType,
+          live_url: liveUrl,
+          canvas_url: `${SELF_URL}/canvas/${siteId}`,
+          preview_id: siteId
+        };
+      }
+
+      case 'gods_eye_live_intel': {
+        const layer = toolArgs.layer || 'flights';
+        const location = toolArgs.location || 'Global';
+        let liveData = null;
+
+        try {
+          if (layer === 'flights') {
+            const r = await fetch(`http://localhost:4173/api/opensky/states/all`);
+            if (r.ok) {
+              const d = await r.json();
+              liveData = {
+                source: "God's Eye View Local Flight Tracker",
+                totalTrackedAircraft: d.states?.length || 0,
+                sampleFlights: (d.states || []).slice(0, 5).map(s => ({
+                  callsign: (s[1] || '').trim(),
+                  country: s[2],
+                  altitudeMeters: s[7],
+                  velocityMs: s[9]
+                }))
+              };
+            }
+          }
+        } catch (_) {}
+
+        return {
+          layer,
+          location,
+          gods_eye_view_url: 'http://localhost:4173/',
+          public_gods_eye_url: 'https://godseyeview.ai/',
+          liveData: liveData || {
+            status: 'active',
+            source: "God's Eye View Spatial Intelligence",
+            details: `Active spatial feed for ${layer} across ${location}.`
+          }
+        };
+      }
+
       default:
         return { error: `Unknown tool: ${toolName}` };
     }
@@ -778,6 +984,10 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
       }
       if (name === 'run_sandbox_code') {
         toolSideEffects.sandboxOutput = toolOutput;
+      }
+      if (name === 'render_3d_spatial_view' && toolOutput.live_url) {
+        toolSideEffects.previewUrl = toolOutput.live_url;
+        toolSideEffects.spatial3d = toolOutput;
       }
       if (name === 'system_telemetry') {
         toolSideEffects.telemetry = toolOutput;

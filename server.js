@@ -1639,6 +1639,28 @@ Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executiv
     return;
   }
 
+  // ── 3D SPATIAL & GOD'S EYE VISUALIZATION ───────────────────────────────────
+  if (/^\/(spatial|3d|globe)$/i.test(cleanInput)) {
+    await sendTelegramTextMessage(
+      chatId,
+      `🌐 **Generating 3D Spatial Intelligence Model...**\nInitializing Three.js WebGL globe & orbital telemetry.`
+    );
+
+    try {
+      const toolRes = await executeTool(
+        'render_3d_spatial_view',
+        { title: "Riya 3D Spatial Reconnaissance Model", scene_type: "globe_telemetry" },
+        { chatId, PREVIEWS_DIR, SELF_URL, sendTelegramBufferDocument }
+      );
+
+      const msg = `🌐 **Interactive 3D Spatial Model Ready!**\n\n• **Title:** Riya 3D Spatial Reconnaissance\n• **3D WebGL Preview:** ${toolRes.live_url}\n• **Canvas Studio:** ${toolRes.canvas_url}\n• **Local God's Eye 3D Engine:** http://localhost:4173/\n\n_Drag to orbit, scroll to zoom in full 3D space._`;
+      await sendTelegramTextMessage(chatId, msg);
+    } catch (spatialErr) {
+      await sendTelegramTextMessage(chatId, `❌ **3D Render Error:** ${spatialErr.message}`);
+    }
+    return;
+  }
+
   let userText = msg.text || msg.caption || '';
   let imagePart = null;
   let audioPart = null;
@@ -1881,6 +1903,7 @@ async function registerTelegramCommands() {
       { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
       { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
       { command: 'canvas', description: 'Browse recent live website builds' },
+      { command: 'spatial', description: 'Interactive 3D WebGL spatial model & globe viewer' },
       { command: 'brief', description: 'Trigger on-demand executive intelligence brief' },
       { command: 'share', description: 'View invite passcode to share with friends' },
       { command: 'users', description: 'List authorized users with access' },
