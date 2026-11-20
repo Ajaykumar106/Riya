@@ -1125,7 +1125,7 @@ async function callOpenAICompatible({ endpoint, apiKey, model, sysPrompt, messag
   }
 }
 
-// ── DETECT WHETHER QUERY REQUIRES LIVE SEARCH OR VISION ─────────────────────
+// ── DETECT WHETHER QUERY REQUIRES LIVE TOOLS, OSINT, SEARCH OR MEDIA ─────────
 function isSearchOrMediaRequest(messagesList) {
   if (!messagesList || !messagesList.length) return false;
   if (messagesList.some(m => m.imagePart || m.audioPart)) return true;
@@ -1135,9 +1135,20 @@ function isSearchOrMediaRequest(messagesList) {
     'search the web', 'google search', 'live search', 'latest news', 'aaj ki khabar',
     'breaking news', 'current weather', 'stock price', 'crypto price', 'live score',
     'gold rate', 'happened today', 'recent updates', 'what happened in', 'match score',
-    'http://', 'https://'
+    'http://', 'https://', 'www.',
+    'osint', 'profile', 'recon', 'footprint', 'background', 'lookup',
+    'github', 'repo', 'repository', 'commit', 'branch',
+    'synthesize', 'notebook', 'grounded',
+    'spatial', '3d view', 'globe', 'render',
+    'sandbox', 'execute', 'run code'
   ];
-  return searchTriggers.some(kw => combinedText.includes(kw));
+  if (searchTriggers.some(kw => combinedText.includes(kw))) return true;
+
+  // Check if latest message contains an email address
+  const lastMsg = messagesList[messagesList.length - 1]?.content || '';
+  if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(lastMsg)) return true;
+
+  return false;
 }
 
 // ── DYNAMIC REQUEST-AWARE MODEL ROUTER (QUOTA PRESERVER) ────────────────────
@@ -2184,14 +2195,14 @@ Deliverable Requirements:
     if (!rawTarget) {
       await sendTelegramTextMessage(
         chatId,
-        `🌐 **Public OSINT & Tech-Stack Profiler**\n\nUsage: \`/osint <github-user or company-domain>\`\n*Example:* \`/osint Ajaykumar106\` or \`/osint zerodha.com\``
+        `🌐 **Public OSINT & Tech-Stack Profiler**\n\nUsage: \`/osint <github-user, company-domain, or email>\`\n*Examples:*\n• Developer: \`/osint Ajaykumar106\`\n• Company: \`/osint zerodha.com\`\n• Email: \`/osint someone@company.com\``
       );
       return;
     }
 
     await sendTelegramTextMessage(
       chatId,
-      `🌐 **Stark Trinity OSINT Profiling Active**\n\n• Target: \`${rawTarget}\`\n• Scanning public repositories, language distribution, infrastructure headers & DNS...\n\n_Compiling executive intelligence dossier & visual chart..._`
+      `🌐 **Stark Trinity OSINT Profiling Active**\n\n• Target: \`${rawTarget}\`\n• Scanning public repositories, Gravatar persona, infrastructure headers, SPF/DMARC & DNS...\n\n_Compiling executive intelligence dossier & visual chart..._`
     );
 
     try {
@@ -2225,6 +2236,34 @@ ${profile.topRepositories.map(r => `• **${r.name}** (${r.language}) — ⭐ ${
 
 ## 4. Engineering Archetype & Architectural Assessment
 Based on repository analysis and language breadth, this profile exhibits high technical versatility with strong capabilities in modern systems and application architectures.`;
+      } else if (profile.type === 'email') {
+        dossierMarkdown = `# Executive Email Footprint & OSINT Dossier: ${profile.email}
+
+## 1. Identity & Public Persona
+• **Target Email:** \`${profile.email}\`
+• **Domain Classification:** ${profile.isDisposable ? '⚠️ Disposable / Temporary Mail (High Risk)' : (profile.isFreeProvider ? 'Consumer Freemail' : 'Corporate / Custom Domain')}
+• **Gravatar Persona:** ${profile.gravatarProfile ? '✅ Registered' : '⚪ No Public Gravatar Found'}
+  - **Display Name:** ${profile.gravatarProfile?.displayName || 'N/A'}
+  - **Username / Handle:** ${profile.gravatarProfile?.username || 'N/A'}
+  - **Location:** ${profile.gravatarProfile?.location || 'Not listed'}
+  - **About / Bio:** ${profile.gravatarProfile?.aboutMe || 'None listed'}
+  - **Profile URL:** ${profile.gravatarProfile?.profileUrl || 'N/A'}
+  - **Connected Links:** ${(profile.gravatarProfile?.urls || []).map(u => `[${u.title}](${u.url})`).join(', ') || 'None found'}
+
+## 2. Developer Correlation (GitHub Footprint)
+• **GitHub Account Correlation:** ${profile.githubUser ? `✅ Found: @${profile.githubUser.login} (${profile.githubUser.html_url})` : '⚪ No direct public GitHub commit match'}
+
+## 3. Mail Infrastructure & Delivery Routing
+• **Domain:** \`${profile.domain}\`
+• **Detected Mail Infrastructure:** ${profile.mailProvider}
+• **Configured MX Records:**
+${profile.mxRecords.map(m => `  - ${m}`).join('\n') || '  - None detected'}
+• **SPF Record:** \`${profile.spfRecord || 'None / Not published'}\`
+• **DMARC Policy:** \`${profile.dmarcRecord || 'None / Not published'}\`
+
+## 4. Cyber Risk & Reconnaissance Assessment
+• **Disposable / Fraud Risk:** ${profile.isDisposable ? '🔴 High Risk — Temporary disposable domain' : '🟢 Clean — Legitimate mail exchange infrastructure'}
+• **Public Exposure Level:** ${profile.gravatarProfile || profile.githubUser ? '🟡 High Public Visibility (Active online footprint)' : '🔵 Low Public Surface'}`;
       } else {
         dossierMarkdown = `# Executive Company Infrastructure Dossier: ${profile.domain}
 
@@ -2788,6 +2827,12 @@ Output an Executive Briefing in clean Markdown.`;
   } catch (err) {
     clearInterval(typingInterval);
     console.error('[Telegram Processing Error]:', err.message);
+    try {
+      await sendTelegramTextMessage(
+        chatId,
+        `⚠️ Ek brief processing issue aya: ${err.message || 'Execution error'}.\nMain active aur ready hoon. Aap query dobara bhej sakte hain.`
+      );
+    } catch (_) {}
   }
 });
 

@@ -286,12 +286,12 @@ const FUNCTION_DECLARATIONS = [
   },
   {
     name: 'osint_profiler',
-    description: '100% legal public intelligence and tech-stack profiler for developers (GitHub username) or companies (domain). Gathers public repository activity, tech stack, DNS/MX infrastructure, and architectural metrics.',
+    description: '100% legal public intelligence and tech-stack profiler for developers (GitHub username), companies (domain), or email addresses (Gravatar public persona, GitHub profile, SPF/DMARC & mail infrastructure). Gathers public repository activity, tech stack, DNS/MX infrastructure, and architectural metrics.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        target: { type: 'STRING', description: 'GitHub username (e.g. Ajaykumar106) or company domain (e.g. zerodha.com)' },
-        target_type: { type: 'STRING', description: 'Type: developer, company, or auto' }
+        target: { type: 'STRING', description: 'GitHub username (e.g. Ajaykumar106), company domain (e.g. zerodha.com), or email address (e.g. name@company.com)' },
+        target_type: { type: 'STRING', description: 'Type: developer, company, email, or auto' }
       },
       required: ['target']
     }

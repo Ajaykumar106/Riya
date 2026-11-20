@@ -109,19 +109,145 @@ Actionable, pragmatic takeaways for shipping and execution.`;
   };
 }
 
-// ── 2. LEGAL PUBLIC OSINT & DEVELOPER / COMPANY PROFILER ─────────────────────
+// ── 2. LEGAL PUBLIC OSINT & DEVELOPER / COMPANY / EMAIL PROFILER ─────────────
 async function profileTarget(targetInput, targetType = 'auto') {
   const cleanTarget = (targetInput || '').trim().replace(/^@/, '');
-  if (!cleanTarget) throw new Error('Target (GitHub username or company domain) is required');
+  if (!cleanTarget) throw new Error('Target (GitHub username, company domain, or email address) is required');
 
-  const isDomain = cleanTarget.includes('.') && !cleanTarget.startsWith('http');
-  const type = targetType === 'auto' ? (isDomain ? 'company' : 'developer') : targetType;
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanTarget);
+  const isDomain = cleanTarget.includes('.') && !cleanTarget.startsWith('http') && !isEmail;
 
-  if (type === 'developer' || !isDomain) {
+  if (targetType === 'email' || isEmail) {
+    return await profileEmailAddress(cleanTarget);
+  } else if (targetType === 'developer' || (!isDomain && !isEmail)) {
     return await profileGitHubDeveloper(cleanTarget);
   } else {
     return await profileCompanyDomain(cleanTarget);
   }
+}
+
+// 2a. Email OSINT & Public Identity Enrichment
+async function profileEmailAddress(rawEmail) {
+  const email = (rawEmail || '').trim().toLowerCase();
+  console.log(`>> [OSINT Engine]: Profiling Public Email Footprint: ${email}`);
+
+  const [username, domain] = email.split('@');
+  const crypto = require('crypto');
+  const md5Hash = crypto.createHash('md5').update(email).digest('hex');
+
+  // 1. Check Gravatar Public Profile
+  let gravatarProfile = null;
+  try {
+    const gRes = await fetch(`https://en.gravatar.com/${md5Hash}.json`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+    if (gRes.ok) {
+      const gData = await gRes.json();
+      if (gData.entry && gData.entry[0]) {
+        const e = gData.entry[0];
+        gravatarProfile = {
+          displayName: e.displayName || e.preferredUsername || 'N/A',
+          username: e.preferredUsername || 'N/A',
+          profileUrl: e.profileUrl || `https://gravatar.com/${md5Hash}`,
+          aboutMe: e.aboutMe || 'None listed',
+          location: e.currentLocation || 'N/A',
+          photos: (e.photos || []).map(p => p.value),
+          urls: (e.urls || []).map(u => ({ title: u.title || 'Link', url: u.value }))
+        };
+      }
+    }
+  } catch (gErr) {
+    console.warn(`[Gravatar Lookup Warning]:`, gErr.message);
+  }
+
+  // 2. Check GitHub User by Email
+  let githubUser = null;
+  try {
+    const ghRes = await fetch(`https://api.github.com/search/users?q=${encodeURIComponent(email)}`, {
+      headers: { 'User-Agent': 'Riya-StarkTrinity-OSINT/3.0' }
+    });
+    if (ghRes.ok) {
+      const ghData = await ghRes.json();
+      if (ghData.items && ghData.items[0]) {
+        githubUser = {
+          login: ghData.items[0].login,
+          html_url: ghData.items[0].html_url,
+          avatar_url: ghData.items[0].avatar_url
+        };
+      }
+    }
+  } catch (ghErr) {
+    console.warn(`[GitHub Email Lookup Warning]:`, ghErr.message);
+  }
+
+  // 3. Domain & Mail Infrastructure Check
+  const isFreeProvider = /^(gmail\.com|yahoo\.com|hotmail\.com|outlook\.com|icloud\.com|aol\.com|proton\.me|protonmail\.com)$/i.test(domain);
+  const isDisposable = /^(10minutemail|tempmail|guerrillamail|mailinator|temp-mail|throwawaymail)\./i.test(domain);
+
+  let mailProvider = isFreeProvider ? `Consumer Freemail (${domain})` : 'Corporate / Custom Domain';
+  let mxRecords = [];
+  try {
+    const mxRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`).then(r => r.json());
+    if (mxRes?.Answer) {
+      mxRecords = mxRes.Answer.map(a => a.data);
+      const mxStr = mxRecords.join(' ').toLowerCase();
+      if (mxStr.includes('google') || mxStr.includes('aspmx')) mailProvider = 'Google Workspace / Gmail';
+      else if (mxStr.includes('outlook') || mxStr.includes('microsoft')) mailProvider = 'Microsoft 365 / Exchange';
+      else if (mxStr.includes('zoho')) mailProvider = 'Zoho Mail';
+      else if (mxStr.includes('proton')) mailProvider = 'ProtonMail';
+    }
+  } catch (mxErr) {
+    console.warn(`[MX Lookup Warning]:`, mxErr.message);
+  }
+
+  // 4. SPF & DMARC DNS Verification
+  let spfRecord = null;
+  let dmarcRecord = null;
+  try {
+    const txtRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=TXT`).then(r => r.json());
+    if (txtRes?.Answer) {
+      const spf = txtRes.Answer.find(a => (a.data || '').toLowerCase().includes('v=spf1'));
+      if (spf) spfRecord = spf.data.replace(/"/g, '');
+    }
+  } catch (_) {}
+
+  try {
+    const dmarcRes = await fetch(`https://dns.google/resolve?name=_dmarc.${encodeURIComponent(domain)}&type=TXT`).then(r => r.json());
+    if (dmarcRes?.Answer) {
+      const dmarc = dmarcRes.Answer.find(a => (a.data || '').toLowerCase().includes('v=dmarc1'));
+      if (dmarc) dmarcRecord = dmarc.data.replace(/"/g, '');
+    }
+  } catch (_) {}
+
+  const chartData = {
+    type: 'radar',
+    title: `Email Intelligence: ${email.slice(0, 25)}`,
+    labels: ['Public Persona Visibility', 'Corporate Legitimacy', 'Mail Infrastructure Health', 'Developer Footprint', 'Deliverability Confidence'],
+    data: [
+      gravatarProfile ? 95 : 30,
+      !isFreeProvider && !isDisposable ? 90 : 50,
+      mxRecords.length >= 2 ? 95 : 60,
+      githubUser ? 95 : 25,
+      !isDisposable ? 92 : 15
+    ],
+    datasetLabel: 'Identity & Footprint Score (0-100)'
+  };
+
+  return {
+    type: 'email',
+    email,
+    usernamePart: username,
+    domain,
+    isFreeProvider,
+    isDisposable,
+    mailProvider,
+    mxRecords: mxRecords.slice(0, 3),
+    spfRecord,
+    dmarcRecord,
+    gravatarProfile,
+    githubUser,
+    chartData
+  };
 }
 
 // 2a. Developer OSINT via Public GitHub API

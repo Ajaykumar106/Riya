@@ -45,6 +45,15 @@ async function runTests() {
   assert(notebook.chartData);
   console.log(`[PASS] ✅ NotebookLM Synthesizer: Synthesized across ${notebook.sourcesCount} sources with inline citations`);
 
+  // 4. Test Email Address OSINT Profiler
+  console.log("--- 4. Testing Email Address OSINT (torvalds@linux-foundation.org) ---");
+  const emailProfile = await profileTarget('torvalds@linux-foundation.org');
+  assert.strictEqual(emailProfile.type, 'email');
+  assert.strictEqual(emailProfile.domain, 'linux-foundation.org');
+  assert(Array.isArray(emailProfile.mxRecords));
+  assert(emailProfile.chartData);
+  console.log(`[PASS] ✅ Email OSINT: Domain: ${emailProfile.domain}, Provider: ${emailProfile.mailProvider}, MX: ${emailProfile.mxRecords.join(', ')}`);
+
   console.log("========================================================");
   console.log(">> ALL INTEL & OSINT TESTS PASSED SUCCESSFULLY!");
   console.log("========================================================");
