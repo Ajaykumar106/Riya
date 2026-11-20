@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test:security": "node test_security.js"
+    "test": "node test_security.js && node test_multimodel.js",
+    "test:security": "node test_security.js",
+    "test:models": "node test_multimodel.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

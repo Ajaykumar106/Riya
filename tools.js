@@ -887,6 +887,10 @@ async function executeTool(toolName, toolArgs, context = {}) {
 async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn) {
   const cleanKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!cleanKey) {
+    if (fallbackFn) {
+      const fallbackText = await fallbackFn(sysPrompt, messagesList);
+      return { text: fallbackText };
+    }
     return { text: "Riya System Notice: GEMINI_API_KEY is missing." };
   }
 

@@ -75,9 +75,16 @@ function requireAdminAuth(req, res, next) {
 app.use('/api/', rateLimiter(60));
 
 // ── CORE ENVIRONMENT CONFIGURATION ────────────────────────────────────────────
-const GEMINI_KEY   = process.env.GEMINI_API_KEY    || '';
-const TELEGRAM_KEY = process.env.TELEGRAM_BOT_TOKEN || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL       || 'gemini-3.5-flash';
+const GEMINI_KEY     = process.env.GEMINI_API_KEY      || '';
+const TELEGRAM_KEY   = process.env.TELEGRAM_BOT_TOKEN   || '';
+const GEMINI_MODEL   = process.env.GEMINI_MODEL         || 'gemini-3.5-flash';
+const GROQ_KEY       = process.env.GROQ_API_KEY        || '';
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY   || '';
+const LOCAL_LLM_URL  = process.env.LOCAL_LLM_URL        || '';
+const LOCAL_LLM_KEY  = process.env.LOCAL_LLM_KEY        || '';
+
+// State tracking for active model provider across failovers
+let lastUsedProvider = GEMINI_KEY ? 'Google Gemini' : (GROQ_KEY ? 'Groq Cloud' : (OPENROUTER_KEY ? 'OpenRouter' : 'None'));
 
 // Live Render external domain
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://riya-hgn9.onrender.com';
@@ -188,9 +195,72 @@ setInterval(() => {
   if (SELF_URL) fetch(SELF_URL + '/ping').catch(() => {});
 }, 14 * 60 * 1000);
 
-app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, memory: "Neon pgvector", tools: FUNCTION_DECLARATIONS.length, t: Date.now() }));
+app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, activeProvider: lastUsedProvider, memory: "Neon pgvector", tools: FUNCTION_DECLARATIONS.length, t: Date.now() }));
 app.get('/healthz', (req, res) => res.json({ status: 'healthy', name: "Riya", memory: "Active", t: Date.now() }));
-app.get('/api/godeye', (req, res) => res.json(godEye.getTelemetry({ model: GEMINI_MODEL })));
+app.get('/api/godeye', (req, res) => res.json(godEye.getTelemetry({ model: `${GEMINI_MODEL} [Active: ${lastUsedProvider}]` })));
+
+app.get('/api/models', (req, res) => {
+  const geminiClean = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const groqClean = (GROQ_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const openRouterClean = (OPENROUTER_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const localClean = (LOCAL_LLM_URL || '').trim();
+
+  res.json({
+    status: 'online',
+    timestamp: new Date().toISOString(),
+    activeProvider: lastUsedProvider,
+    providers: {
+      gemini: {
+        configured: Boolean(geminiClean),
+        primaryModel: GEMINI_MODEL,
+        role: "JARVIS Core Reasoning Engine",
+        models: [
+          GEMINI_MODEL,
+          'gemini-3.1-flash-lite',
+          'gemini-flash-lite-latest',
+          'gemini-3.5-flash',
+          'gemini-3.1-pro-preview'
+        ]
+      },
+      groq: {
+        configured: Boolean(groqClean),
+        role: "FRIDAY High-Speed Sub-Second Tactical Execution (500+ tok/s)",
+        models: [
+          process.env.GROQ_MODEL || 'deepseek-r1-distill-llama-70b',
+          'llama-3.3-70b-versatile',
+          'llama-3.1-8b-instant'
+        ]
+      },
+      openrouter: {
+        configured: Boolean(openRouterClean),
+        role: "Universal Frontier Multi-Model & Open-Weights Fallback",
+        models: [
+          process.env.OPENROUTER_MODEL || 'deepseek/deepseek-r1:free',
+          'meta-llama/llama-3.3-70b-instruct:free',
+          'qwen/qwen-2.5-72b-instruct:free',
+          'google/gemini-2.0-flash-exp:free'
+        ]
+      },
+      localLlm: {
+        configured: Boolean(localClean),
+        url: localClean || null,
+        model: process.env.LOCAL_LLM_MODEL || 'deepseek-r1:8b',
+        role: "Local Edge Sandbox Inference"
+      },
+      godEye: {
+        status: "Online",
+        spatialUrl: "/spatial",
+        liveFeed: "http://localhost:4173",
+        role: "EDITH Global Spatial & System Telemetry HUD"
+      }
+    },
+    starkTrinity: {
+      jarvis: "Contextual Awareness, Neon Memory, Deep Reasoning",
+      friday: "Sub-Second Code Verification, ReAct Sandbox, High-Speed Response",
+      edith: "God's Eye Satellite 3D HUD, Real-time Surveillance & Defense"
+    }
+  });
+});
 
 // ── AUTONOMOUS MORNING ROUTINE SCHEDULER (06:00 AM DEFAULT CRON ENGINE) ───────
 setInterval(async () => {
@@ -858,87 +928,239 @@ ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 • Natural, fluent English. If Ajay speaks in Hindi or Hinglish, respond naturally in respectful Hinglish/English with zero robotic awkwardness.`;
 }
 
-// ── CORE GEMINI CALL (BULLETPROOF MULTI-MODEL FALLBACK) ───────────────────────
-async function callGemini(sysPrompt, messagesList) {
-  const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
-  if (!cleanKey) {
-    return "Riya System Notice: GEMINI_API_KEY is not set in Render environment variables.";
+// ── OPENAI-COMPATIBLE CHAT ENGINE (GROQ CLOUD, OPENROUTER, LOCAL LLM) ────────
+async function callOpenAICompatible({ endpoint, apiKey, model, sysPrompt, messagesList, extraHeaders = {}, timeoutMs = 20000 }) {
+  const messages = [];
+  if (sysPrompt) {
+    messages.push({ role: 'system', content: sysPrompt });
   }
-
-  const contents = [];
   for (const m of messagesList) {
     if (m.role === 'system') continue;
-    const parts = [];
-    if (m.content) parts.push({ text: m.content });
-    if (m.imagePart) parts.push(m.imagePart);
-    if (m.audioPart) parts.push(m.audioPart);
-    contents.push({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: parts.length ? parts : [{ text: '' }]
+    let content = m.content || '';
+    messages.push({
+      role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user',
+      content: typeof content === 'string' ? content : JSON.stringify(content)
     });
   }
-
-  if (!contents.length) {
-    contents.push({ role: 'user', parts: [{ text: 'Hello Riya' }] });
+  if (!messages.length) {
+    messages.push({ role: 'user', content: 'Hello Riya' });
   }
 
-  const basePayload = {
-    system_instruction: { parts: [{ text: sysPrompt }] },
-    contents: contents,
-    generationConfig: {
-      temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.4'),
-      topP: parseFloat(process.env.GEMINI_TOP_P || '0.95'),
-      topK: parseInt(process.env.GEMINI_TOP_K || '40', 10),
-      maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '8192', 10)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        ...extraHeaders
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+        temperature: parseFloat(process.env.TEMPERATURE || '0.4'),
+        max_tokens: parseInt(process.env.MAX_OUTPUT_TOKENS || '4096', 10)
+      })
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${errBody.slice(0, 180)}`);
     }
-  };
 
-  const modelsToTry = [
-    process.env.GEMINI_MODEL,
-    'gemini-3.1-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-3-flash-preview',
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.7-flash',
-    'gemini-3.1-pro-preview',
-    'gemini-pro-latest'
-  ].filter(Boolean);
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error('Missing choices[0].message.content in API response');
+    }
+    return content.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-  const attempts = [
-    { apiVersion: 'v1beta', payload: { ...basePayload, tools: [{ googleSearch: {} }] } },
-    { apiVersion: 'v1beta', payload: basePayload },
-    { apiVersion: 'v1',     payload: basePayload }
-  ];
+// ── CORE MULTI-MODEL DISPATCHER (GEMINI -> GROQ -> OPENROUTER -> LOCAL) ─────
+async function callGemini(sysPrompt, messagesList) {
+  const cleanGeminiKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const cleanGroqKey = (GROQ_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const cleanOpenRouterKey = (OPENROUTER_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const cleanLocalUrl = (LOCAL_LLM_URL || '').trim();
 
   let lastError = null;
 
-  for (const model of modelsToTry) {
-    for (const att of attempts) {
+  // 1. PRIMARY TIER: GOOGLE GEMINI FRONTIER MODELS
+  if (cleanGeminiKey) {
+    const contents = [];
+    for (const m of messagesList) {
+      if (m.role === 'system') continue;
+      const parts = [];
+      if (m.content) parts.push({ text: m.content });
+      if (m.imagePart) parts.push(m.imagePart);
+      if (m.audioPart) parts.push(m.audioPart);
+      contents.push({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: parts.length ? parts : [{ text: '' }]
+      });
+    }
+
+    if (!contents.length) {
+      contents.push({ role: 'user', parts: [{ text: 'Hello Riya' }] });
+    }
+
+    const basePayload = {
+      system_instruction: { parts: [{ text: sysPrompt }] },
+      contents: contents,
+      generationConfig: {
+        temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.4'),
+        topP: parseFloat(process.env.GEMINI_TOP_P || '0.95'),
+        topK: parseInt(process.env.GEMINI_TOP_K || '40', 10),
+        maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '8192', 10)
+      }
+    };
+
+    const modelsToTry = [
+      process.env.GEMINI_MODEL,
+      'gemini-3.1-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3-flash-preview',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-3.7-flash',
+      'gemini-3.1-pro-preview',
+      'gemini-pro-latest'
+    ].filter(Boolean);
+
+    const attempts = [
+      { apiVersion: 'v1beta', payload: { ...basePayload, tools: [{ googleSearch: {} }] } },
+      { apiVersion: 'v1beta', payload: basePayload },
+      { apiVersion: 'v1',     payload: basePayload }
+    ];
+
+    for (const model of modelsToTry) {
+      for (const att of attempts) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${cleanGeminiKey}`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(att.payload)
+          });
+
+          const data = await res.json();
+          if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+            lastUsedProvider = `Google Gemini (${model})`;
+            return data.candidates[0].content.parts[0].text.trim();
+          }
+
+          if (data.error) {
+            lastError = data.error.message;
+          }
+        } catch (e) {
+          lastError = e.message;
+        }
+      }
+    }
+    console.warn(`>> [Multi-Model Notice]: Gemini attempts failed (${lastError}). Initiating failover chain...`);
+  } else {
+    lastError = 'GEMINI_API_KEY is not set';
+  }
+
+  // 2. SECONDARY TIER: GROQ CLOUD (SUB-SECOND INFERENCE & DEEPSEEK-R1 / LLAMA 3.3)
+  if (cleanGroqKey) {
+    const groqModels = [
+      process.env.GROQ_MODEL,
+      'deepseek-r1-distill-llama-70b',
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant'
+    ].filter(Boolean);
+
+    for (const gModel of groqModels) {
       try {
-        const url = `https://generativelanguage.googleapis.com/${att.apiVersion}/models/${model}:generateContent?key=${cleanKey}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(att.payload)
+        console.log(`>> [Failover Dispatch]: Routing request to Groq Cloud (${gModel})...`);
+        const groqText = await callOpenAICompatible({
+          endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+          apiKey: cleanGroqKey,
+          model: gModel,
+          sysPrompt,
+          messagesList
         });
-
-        const data = await res.json();
-        if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-          return data.candidates[0].content.parts[0].text.trim();
+        if (groqText) {
+          lastUsedProvider = `Groq Cloud (${gModel})`;
+          return groqText;
         }
-
-        if (data.error) {
-          lastError = data.error.message;
-        }
-      } catch (e) {
-        lastError = e.message;
+      } catch (gErr) {
+        console.warn(`>> [Groq Failover Notice]: Model ${gModel} failed: ${gErr.message}`);
       }
     }
   }
 
-  return `Riya Error: Could not generate response from Gemini (${lastError || 'Unknown error'}). Check your GEMINI_API_KEY.`;
+  // 3. TERTIARY TIER: OPENROUTER (FREE TIER FRONTIER & OPEN-WEIGHTS)
+  if (cleanOpenRouterKey) {
+    const openRouterModels = [
+      process.env.OPENROUTER_MODEL,
+      'deepseek/deepseek-r1:free',
+      'meta-llama/llama-3.3-70b-instruct:free',
+      'qwen/qwen-2.5-72b-instruct:free',
+      'google/gemini-2.0-flash-exp:free'
+    ].filter(Boolean);
+
+    for (const oModel of openRouterModels) {
+      try {
+        console.log(`>> [Failover Dispatch]: Routing request to OpenRouter (${oModel})...`);
+        const openRouterText = await callOpenAICompatible({
+          endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+          apiKey: cleanOpenRouterKey,
+          model: oModel,
+          sysPrompt,
+          messagesList,
+          extraHeaders: {
+            'HTTP-Referer': 'https://riya.ai',
+            'X-Title': 'Riya Autonomous Stark Trinity AI'
+          }
+        });
+        if (openRouterText) {
+          lastUsedProvider = `OpenRouter (${oModel})`;
+          return openRouterText;
+        }
+      } catch (oErr) {
+        console.warn(`>> [OpenRouter Failover Notice]: Model ${oModel} failed: ${oErr.message}`);
+      }
+    }
+  }
+
+  // 4. QUATERNARY TIER: LOCAL LLM / EDGE SANDBOX INFERENCE (Ollama / vLLM)
+  if (cleanLocalUrl) {
+    const localEndpoint = cleanLocalUrl.replace(/\/+$/, '') + (cleanLocalUrl.includes('/chat/completions') ? '' : '/chat/completions');
+    const localModel = process.env.LOCAL_LLM_MODEL || 'deepseek-r1:8b';
+    try {
+      console.log(`>> [Failover Dispatch]: Routing request to Local LLM at ${localEndpoint}...`);
+      const localText = await callOpenAICompatible({
+        endpoint: localEndpoint,
+        apiKey: process.env.LOCAL_LLM_KEY || 'ollama',
+        model: localModel,
+        sysPrompt,
+        messagesList
+      });
+      if (localText) {
+        lastUsedProvider = `Local Edge LLM (${localModel})`;
+        return localText;
+      }
+    } catch (lErr) {
+      console.warn(`>> [Local LLM Failover Notice]: ${lErr.message}`);
+    }
+  }
+
+  // 5. DIAGNOSTIC REPORT IF ALL PROVIDERS FAILED OR ARE UNCONFIGURED
+  return `Riya Multi-Model Core Notice: All AI model backends failed or are unconfigured.
+• Gemini: ${cleanGeminiKey ? 'Attempted (Failed: ' + lastError + ')' : 'No GEMINI_API_KEY'}
+• Groq: ${cleanGroqKey ? 'Attempted all fallback models' : 'No GROQ_API_KEY (Set free key in Render)'}
+• OpenRouter: ${cleanOpenRouterKey ? 'Attempted free-tier models' : 'No OPENROUTER_API_KEY (Set free key in Render)'}
+Please configure GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY in your Render environment variables for uninterrupted service.`;
 }
 
 // ── DOCUMENT CONTENT PURIFIER (100% DELIVERABLE PURITY) ──────────────────────
@@ -1464,9 +1686,51 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     const telemetry = godEye.getTelemetry({
       userCount: users.length || 1,
       routineCount,
-      model: GEMINI_MODEL
+      model: `${GEMINI_MODEL} [Active: ${lastUsedProvider}]`
     });
     await sendTelegramTextMessage(chatId, telemetry.hudText);
+    return;
+  }
+
+  // ── MULTI-MODEL MATRIX & FAILOVER STATUS ────────────────────────────────────
+  if (/^\/(models|matrix|failover)$/i.test(cleanInput)) {
+    const geminiClean = Boolean((GEMINI_KEY || '').trim());
+    const groqClean = Boolean((GROQ_KEY || '').trim());
+    const openRouterClean = Boolean((OPENROUTER_KEY || '').trim());
+    const localClean = Boolean((LOCAL_LLM_URL || '').trim());
+
+    const matrixText = `🧠 **RIYA MULTI-MODEL FAILOVER MATRIX**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ **Currently Active:** \`${lastUsedProvider}\`
+🏛️ **Stark Trinity Architecture:** Online
+
+1️⃣ **Tier 1 (JARVIS Reasoning Core):**
+• Provider: \`Google Gemini\`
+• Status: ${geminiClean ? '🟢 Active & Ready' : '🔴 Unconfigured (Set GEMINI_API_KEY)'}
+• Model Chain: \`${GEMINI_MODEL}\`, \`gemini-3.1-flash-lite\`, \`gemini-3.5-flash\`
+
+2️⃣ **Tier 2 (FRIDAY Tactical Speed & Reasoning):**
+• Provider: \`Groq Cloud (LPU Sub-Second Inference)\`
+• Status: ${groqClean ? '🟢 Active & Ready' : '⚪ Standby (Set GROQ_API_KEY)'}
+• Model Chain: \`deepseek-r1-distill-llama-70b\`, \`llama-3.3-70b-versatile\`
+• Speed: ~500+ tokens/sec
+
+3️⃣ **Tier 3 (Universal Open-Weights & Frontier):**
+• Provider: \`OpenRouter (Free Tier)\`
+• Status: ${openRouterClean ? '🟢 Active & Ready' : '⚪ Standby (Set OPENROUTER_API_KEY)'}
+• Model Chain: \`deepseek-r1:free\`, \`llama-3.3-70b:free\`, \`qwen-2.5-72b:free\`
+
+4️⃣ **Tier 4 (Edge Sandbox):**
+• Provider: \`Local LLM / Ollama\`
+• Status: ${localClean ? '🟢 Active (' + LOCAL_LLM_URL + ')' : '⚪ Standby'}
+
+👁️ **EDITH Spatial Defense Layer:**
+• Live HUD: \`${SELF_URL}/spatial\`
+• Simulation Bridge: \`http://localhost:4173\` (God's Eye View)
+
+_If any model faces rate limits or downtime, Riya automatically cascades down the chain with zero interruption._`;
+
+    await sendTelegramTextMessage(chatId, matrixText);
     return;
   }
 
@@ -1899,6 +2163,7 @@ async function registerTelegramCommands() {
     const commands = [
       { command: 'start', description: 'Operational status & capabilities overview' },
       { command: 'godeye', description: 'GodEye live surveillance, health & system telemetry HUD' },
+      { command: 'models', description: 'Multi-model failover matrix (Gemini, Groq, OpenRouter)' },
       { command: 'audit', description: 'Audit repository architecture & security (/audit <repo>)' },
       { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
       { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
@@ -1928,12 +2193,15 @@ if (require.main === module) {
     console.log(`==================================================`);
     console.log(`>> RIYA AI CORE ONLINE ON PORT ${PORT}`);
     console.log(`>> GEMINI API: ${GEMINI_KEY ? 'Active' : 'Missing'}`);
-    console.log(`>> MODEL: ${GEMINI_MODEL}`);
+    console.log(`>> GROQ CLOUD API: ${GROQ_KEY ? 'Active (DeepSeek-R1 / Llama-3.3-70B)' : 'Standby'}`);
+    console.log(`>> OPENROUTER API: ${OPENROUTER_KEY ? 'Active (Universal Free Failover)' : 'Standby'}`);
+    console.log(`>> ACTIVE MODEL: ${GEMINI_MODEL} [Provider: ${lastUsedProvider}]`);
     console.log(`>> TELEGRAM: ${TELEGRAM_KEY ? 'Active' : 'Disabled'}`);
     console.log(`>> VECTOR MEMORY: Neon PostgreSQL (pgvector)`);
     console.log(`>> NATIVE TOOLS: ${FUNCTION_DECLARATIONS.length} Registered`);
     console.log(`>> ROUTINE CRON: Active (Asia/Kolkata timezone)`);
     console.log(`>> PREVIEWS: ${SELF_URL}/preview/:id`);
+    console.log(`>> SPATIAL HUD: ${SELF_URL}/spatial`);
     console.log(`==================================================`);
   });
 }
