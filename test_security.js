@@ -3,6 +3,8 @@ const path = require('path');
 const os = require('os');
 const { runInSandbox } = require('./sandbox');
 const { executeTool, extractWebPage } = require('./tools');
+const { cleanDocumentBody } = require('./server');
+const { godEye } = require('./godeye');
 
 async function runSecurityTests() {
   console.log('========================================================');
@@ -108,6 +110,60 @@ async function runSecurityTests() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // TEST SUITE 4: DELIVERABLE PURITY & CHATTER PURIFICATION
+  // ─────────────────────────────────────────────────────────────────────────────
+  console.log('\n--- 4. Testing Deliverable Purity & Document Chatter Stripper ---');
+
+  const rawLeakedReport = `Samajh gayi, AJ. Ekdum simple, black and white, WordPad wala feel-bilkul waisa hi jaisa tune manga hai. Aur haan, image bilkul attach hogi PDF mein taaki report complete lage.
+Ye raha tera document layout. Backend iska PDF compile kerke tere Telegram pe bhej raha hai.
+---
+DOCUMENT: ANALYSISREPORT01.pdf
+Date: November 18, 2026
+Subject: Image Analysis - Elemental Laws Graphic
+---
+[IMAGE ATTACHED HERE]
+(Note: The actual image you uploaded is embedded in the final PDF file)
+---
+ANALYSIS SUMMARY
+Maine is image ko dhyan se dekha. Iska title "The 5 Most Famous Laws In The World" hai, jo pehli nazar mein kaafi serious aur educational lagta hai.
+Key Observations:
+1. The Core: Fire, Water, Lightning, Earth, Wind.
+2. The Connection: Breathing Styles.
+Conclusion:
+Elemental analysis complete.
+---
+End of Document
+---
+PDF generate ho raha hai... Done. Check kar lo AJ, ekdum simple aur professional hai.`;
+
+  const cleaned = cleanDocumentBody(rawLeakedReport);
+  const noSamajhGayi = !cleaned.includes('Samajh gayi');
+  const noYeRaha = !cleaned.includes('Ye raha tera');
+  const noImagePlaceholder = !cleaned.includes('[IMAGE ATTACHED HERE]');
+  const noTrailingChatter = !cleaned.includes('PDF generate ho raha hai') && !cleaned.includes('Check kar lo AJ');
+  const hasPureAnalysis = cleaned.includes('DOCUMENT: ANALYSISREPORT01.pdf') && cleaned.includes('ANALYSIS SUMMARY');
+
+  record('Deliverable Purity: Preamble Stripped (Samajh gayi)', noSamajhGayi);
+  record('Deliverable Purity: Layout Chat Stripped (Ye raha tera)', noYeRaha);
+  record('Deliverable Purity: Fake Placeholder Stripped ([IMAGE ATTACHED HERE])', noImagePlaceholder);
+  record('Deliverable Purity: Trailing Chat Stripped (PDF generate ho raha hai... Done)', noTrailingChatter);
+  record('Deliverable Purity: Core Document Retained (ANALYSIS SUMMARY)', hasPureAnalysis);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // TEST SUITE 5: GODEYE TELEMETRY & SYSTEM SURVEILLANCE
+  // ─────────────────────────────────────────────────────────────────────────────
+  console.log('\n--- 5. Testing GodEye Surveillance & Telemetry HUD ---');
+
+  const telemetry = godEye.getTelemetry({ userCount: 1, routineCount: 1, model: 'gemini-3.1-flash-lite' });
+  const hasHudText = typeof telemetry.hudText === 'string' && telemetry.hudText.includes('GODEYE SURVEILLANCE');
+  const hasUptime = typeof telemetry.uptime === 'string' && telemetry.uptime.length > 0;
+  const hasMemory = telemetry.memory && parseFloat(telemetry.memory.rssMb) > 0;
+
+  record('GodEye Surveillance: HUD Text Generation', hasHudText);
+  record('GodEye Surveillance: Process Uptime Metric', hasUptime, `(Uptime: ${telemetry.uptime})`);
+  record('GodEye Surveillance: Process RSS Memory Metric', hasMemory, `(RSS: ${telemetry.memory?.rssMb} MB)`);
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // SUMMARY
   // ─────────────────────────────────────────────────────────────────────────────
   console.log('\n========================================================');
@@ -117,6 +173,7 @@ async function runSecurityTests() {
   if (failed > 0) {
     process.exit(1);
   }
+  process.exit(0);
 }
 
 runSecurityTests().catch(err => {

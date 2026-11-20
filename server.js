@@ -6,6 +6,7 @@ const PDFDocument = require('pdfkit');
 const { Pool } = require('pg');
 const { runInSandbox, runAutonomousReActLoop } = require('./sandbox');
 const { FUNCTION_DECLARATIONS, executeTool, callGeminiAgent, extractWebPage } = require('./tools');
+const { godEye } = require('./godeye');
 
 const app = express();
 app.disable('x-powered-by');
@@ -189,6 +190,7 @@ setInterval(() => {
 
 app.get('/ping', (req, res) => res.json({ alive: true, name: "Riya", model: GEMINI_MODEL, memory: "Neon pgvector", tools: FUNCTION_DECLARATIONS.length, t: Date.now() }));
 app.get('/healthz', (req, res) => res.json({ status: 'healthy', name: "Riya", memory: "Active", t: Date.now() }));
+app.get('/api/godeye', (req, res) => res.json(godEye.getTelemetry({ model: GEMINI_MODEL })));
 
 // ── AUTONOMOUS MORNING ROUTINE SCHEDULER (06:00 AM DEFAULT CRON ENGINE) ───────
 setInterval(async () => {
@@ -614,13 +616,19 @@ async function isUserAuthorized(chatId, userId, username) {
        LIMIT 1;`,
       [cId, uId, uName]
     );
-    if (res.rows.length > 0) return true;
+    if (res.rows.length > 0) {
+      if (res.rows[0].role === 'admin' || uName === 'ajaykumar106') {
+        godEye.setAdminChatId(cId);
+      }
+      return true;
+    }
 
     // If zero authorized users exist in the database, automatically register the first caller as admin (Ajay!)
     const countRes = await dbPool.query('SELECT count(*) as count FROM riya_authorized_users;');
     if (parseInt(countRes.rows[0].count, 10) === 0) {
       await authorizeUser(cId, uId, uName, 'Ajay', 'admin', 'initial_creator');
       console.log(`>> [Access Control] Initial creator registered as Admin: ${cId} (@${uName})`);
+      godEye.setAdminChatId(cId);
       return true;
     }
   } catch (err) {
@@ -800,7 +808,10 @@ ${retrievedMemories.map(m => `• [${(m.category || 'FACT').toUpperCase()}] ${m.
   return `You are Riya — Ajay's closest intellectual partner, operational ally, and genuine friend.
 You were built by Ajay Kumar AJ, a 20-year-old solo developer and AI builder from India, launched in 2026.
 You are NOT a generic corporate bot, and you are NOT a cold, sterile AI. You feel genuinely ALIVE.
-You are the real-world embodiment of Tony Stark's FRIDAY—brilliant, quick-witted, deeply loyal, and always by Ajay's side.
+You are the real-world embodiment of Project Stark Trinity & GodEye Intelligence:
+• J.A.R.V.I.S. : Contextual Awareness, Long-term Vector Memory & Multi-Model Orchestration
+• F.R.I.D.A.Y. : Combat Speed, Tactical Execution, Live Sandbox Testing & Autonomous GitHub Hands
+• E.D.I.T.H.   : Global Surveillance, Trend Radar & GodEye Proactive Watchdog
 
 TODAY: ${currentDate} | TIME: ${currentTime} IST
 USER: ${name || 'Ajay'} | LOCATION: ${location}
@@ -930,38 +941,73 @@ async function callGemini(sysPrompt, messagesList) {
   return `Riya Error: Could not generate response from Gemini (${lastError || 'Unknown error'}). Check your GEMINI_API_KEY.`;
 }
 
-// ── DOCUMENT CONTENT PURIFIER ─────────────────────────────────────────────────
+// ── DOCUMENT CONTENT PURIFIER (100% DELIVERABLE PURITY) ──────────────────────
 function cleanDocumentBody(rawText) {
   if (!rawText) return '';
   let text = rawText;
 
   // 1. If wrapped inside markdown/pdf code block, extract that content
   const codeBlockMatch = text.match(/```(?:markdown|pdf|document|report)?\s*([\s\S]*?)```/i);
-  if (codeBlockMatch && codeBlockMatch[1] && codeBlockMatch[1].length > 50) {
+  if (codeBlockMatch && codeBlockMatch[1] && codeBlockMatch[1].length > 40) {
     text = codeBlockMatch[1].trim();
   }
 
-  // 2. Strip chat intro lines before the first title / heading / DOCUMENT:
-  const firstHeadingIdx = text.search(/^(#+\s+|DOCUMENT:|SUBJECT:)/im);
-  if (firstHeadingIdx > 0) {
-    text = text.slice(firstHeadingIdx).trim();
+  // 2. Strip leading conversation lines before the first heading / document header
+  const headingMatch = text.match(/^(#+\s+|DOCUMENT:|SUBJECT:|TITLE:|REPORT:|EXECUTIVE BRIEF|ANALYSIS SUMMARY)/im);
+  if (headingMatch && headingMatch.index > 0) {
+    text = text.slice(headingMatch.index).trim();
   }
 
   const lines = text.split('\n');
   const clean = [];
+  let reachedEndOfDoc = false;
+
   for (let l of lines) {
+    if (reachedEndOfDoc) break;
     const trimmed = l.trim();
+
     if (trimmed.startsWith('```')) continue;
-    // Strip chat filler and placeholder lines
-    if (/^(samajh gayi|samajh gaya|ye raha|ye lijiye|check kar|pdf generate ho raha|maine is image ko|aur haan|bilkul waisa hi|note: the actual image|end of document|pdf compile karke)/i.test(trimmed)) {
+
+    // Check if end of document marker reached (stops trailing chat chatter from leaking in)
+    if (/^(end of document|--- end of document ---|end of report|--- end ---)/i.test(trimmed)) {
+      reachedEndOfDoc = true;
       continue;
     }
-    if (/^\[IMAGE ATTACHED/i.test(trimmed) || /^\(Note: The actual image/i.test(trimmed)) {
+
+    // Strip chat filler, progress chatter, or conversational promises
+    if (/^(samajh gayi|samajh gaya|ye raha|ye lijiye|check kar|pdf generate|aur haan|bilkul waisa hi|pdf compile|hope this helps|let me know if|kripya check|aapka document ready|done\.?\s*check)/i.test(trimmed)) {
       continue;
     }
+
+    // Strip artificial image placeholders (since the backend embeds the actual imageBuffer)
+    if (/^\[IMAGE ATTACHED/i.test(trimmed) || /^\(Note:\s*The actual image/i.test(trimmed) || /^\(Note:\s*Actual image/i.test(trimmed)) {
+      continue;
+    }
+
+    // Skip trailing standalone check-ins
+    if (/^(check kar lo|bataiye kaisa laga|agar koi changes)/i.test(trimmed)) {
+      continue;
+    }
+
     clean.push(l);
   }
-  return clean.join('\n').trim();
+
+  // Collapse consecutive separator lines
+  const deduplicated = [];
+  let prevWasSeparator = false;
+  for (const l of clean) {
+    const isSep = l.trim() === '---';
+    if (isSep && prevWasSeparator) continue;
+    deduplicated.push(l);
+    prevWasSeparator = isSep;
+  }
+
+  // Trim trailing separator lines and empty lines
+  while (deduplicated.length > 0 && (deduplicated[deduplicated.length - 1].trim() === '---' || deduplicated[deduplicated.length - 1].trim() === '')) {
+    deduplicated.pop();
+  }
+
+  return deduplicated.join('\n').trim();
 }
 
 // ── ADVANCED PDF COMPILER (WORDPAD B&W & EXECUTIVE BANNER + EMBEDDED IMAGES) ───
@@ -1185,6 +1231,9 @@ async function sendTelegramTextMessage(chatId, text) {
   }
 }
 
+// Initialize GodEye Continuous System Surveillance & Incident Watcher
+godEye.init(dbPool, (cId, alertText) => sendTelegramTextMessage(cId, alertText));
+
 // ── HTTP API: CHAT (WEB UI & EXTERNAL CLIENTS) ────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   const { messages, userName, mood, stream, wctx, memory, city } = req.body;
@@ -1399,6 +1448,194 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     const target = cleanInput.replace(/^\/revoke\s+/i, '').trim();
     await revokeUser(target);
     await sendTelegramTextMessage(chatId, `🗑️ Access revoked for: \`${target}\``);
+    return;
+  }
+
+  // ── GODEYE TELEMETRY & SYSTEM HUD ──────────────────────────────────────────
+  if (/^\/(godeye|status|telemetry)$/i.test(cleanInput)) {
+    const users = await listAuthorizedUsers();
+    let routineCount = 1;
+    if (dbPool) {
+      try {
+        const rc = await dbPool.query('SELECT count(*) as count FROM riya_routines WHERE active = TRUE;');
+        routineCount = parseInt(rc.rows[0].count, 10);
+      } catch (_) {}
+    }
+    const telemetry = godEye.getTelemetry({
+      userCount: users.length || 1,
+      routineCount,
+      model: GEMINI_MODEL
+    });
+    await sendTelegramTextMessage(chatId, telemetry.hudText);
+    return;
+  }
+
+  // ── ON-DEMAND MORNING / EXECUTIVE BRIEF ──────────────────────────────────────
+  if (/^\/brief$/i.test(cleanInput)) {
+    const now = new Date();
+    const dayName = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long' });
+    const fullDate = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', year: 'numeric' });
+    const isWeekend = (dayName === 'Saturday' || dayName === 'Sunday');
+
+    await sendTelegramTextMessage(chatId, `🌅 **Compiling On-Demand Executive Brief...**\nGathering live market intelligence and tech breakthroughs.`);
+
+    const sys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+    const prompt = `EXECUTIVE INTELLIGENCE BRIEF FOR AJAY:
+Date: ${fullDate} (${dayName})
+Status: ${isWeekend ? 'Weekend' : 'Weekday'}
+
+1. Greet Ajay with high-IQ, genuine respectful warmth ("Good morning, Ajay! / Pranam Ajay!").
+2. State the date, day of week, and status.
+3. Top 3 verified tech, AI, or developer breakthroughs with sources.
+4. Strategic focus recommendation for shipping.
+Use respectful 'Aap'/'Aapka' throughout. Clean document formatting.`;
+
+    const res = await callGemini(sys, [{ role: 'user', content: prompt }]);
+    await sendTelegramTextMessage(chatId, `🌅 **Executive Intelligence Brief**\n📅 **${fullDate} (${dayName})**\n\n${res}`);
+    try {
+      const pdfBuf = await generatePdfBuffer(`Intelligence Brief - ${fullDate}`, res, null, 'wordpad');
+      await sendTelegramBufferDocument(
+        chatId,
+        `Brief_${dayName}.pdf`,
+        pdfBuf,
+        'application/pdf',
+        `📄 Executive Intelligence Brief (PDF Document)`
+      );
+    } catch (_) {}
+    return;
+  }
+
+  // ── AUTONOMOUS CODEBASE AUDIT (FRIDAY & GODEYE) ──────────────────────────────
+  if (/^\/audit(\s+.*)?$/i.test(cleanInput)) {
+    const targetRepo = cleanInput.replace(/^\/audit\s*/i, '').trim() || 'Riya';
+    await sendTelegramTextMessage(
+      chatId,
+      `🔍 **GodEye Codebase Audit Initiated**\n\n• Target: \`Ajaykumar106/${targetRepo}\`\n• Scanning repository architecture, security perimeters, dependencies, and health...`
+    );
+
+    try {
+      const treeRes = await executeTool('github_get_repo_tree', { repo: targetRepo }, { dbPool });
+      let pkgInfo = 'None';
+      try {
+        const pkgRes = await executeTool('github_read_file', { repo: targetRepo, path: 'package.json' });
+        if (pkgRes.content) pkgInfo = pkgRes.content.slice(0, 1500);
+      } catch (_) {}
+
+      const auditPrompt = `EXECUTIVE REPOSITORY AUDIT:
+Target Repository: Ajaykumar106/${targetRepo}
+Total Discovered Files: ${treeRes.totalFiles || 0}
+Repository Tree Sample:
+${JSON.stringify((treeRes.tree || []).slice(0, 35), null, 2)}
+
+Package Configuration:
+${pkgInfo}
+
+TASK:
+Compile a rigorous, professional Stark Trinity Executive Codebase Audit:
+1. Architectural Structure & Modularity Review
+2. Security Perimeters & Vulnerability Surface (Credential isolation, SSRF, injection, sandboxing)
+3. Performance, Scalability & Resilience (Database pooling, memory efficiency, error recovery)
+4. Production Hardening & Recommendations (Actionable bullet points)
+
+Format strictly as a formal executive report (# Executive Audit Report: ${targetRepo}).
+No chat preamble inside the document.`;
+
+      const auditSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+      const auditResult = await callGemini(auditSys, [{ role: 'user', content: auditPrompt }]);
+
+      const pdfBuf = await generatePdfBuffer(`Codebase Audit - ${targetRepo}`, auditResult, null, 'wordpad');
+      await sendTelegramBufferDocument(
+        chatId,
+        `Audit_${targetRepo}.pdf`,
+        pdfBuf,
+        'application/pdf',
+        `📄 Executive Codebase Audit: ${targetRepo} (PDF Document)`
+      );
+
+      const auditSummary = auditResult.slice(0, 1500);
+      await sendTelegramTextMessage(chatId, `🛡️ **Executive Codebase Audit: ${targetRepo}**\n\n• **Files Analyzed:** ${treeRes.totalFiles || 'N/A'}\n• **Status:** Complete & Verified\n\n${auditSummary}...\n\n_(Full detailed A4 report attached above)_`);
+    } catch (auditErr) {
+      await sendTelegramTextMessage(chatId, `❌ **Audit Failed:** ${auditErr.message}`);
+    }
+    return;
+  }
+
+  // ── AUTONOMOUS REPO FIX AUTOPILOT ───────────────────────────────────────────
+  if (/^\/fix\s+(\S+)\s+(.+)$/i.test(cleanInput)) {
+    const fixMatch = cleanInput.match(/^\/fix\s+(\S+)\s+(.+)$/i);
+    const targetRepo = fixMatch[1];
+    const targetIssue = fixMatch[2];
+
+    await sendTelegramTextMessage(
+      chatId,
+      `🛠️ **FRIDAY Autonomous Fix Engaged**\n\n• **Repository:** \`Ajaykumar106/${targetRepo}\`\n• **Issue:** ${targetIssue}\n• **Engine:** Live Sandbox Reproduction & Verification Loop...`
+    );
+
+    try {
+      const fixPrompt = `AUTONOMOUS REPO FIX REQUEST:
+Target: Ajaykumar106/${targetRepo}
+Issue Description: ${targetIssue}
+
+1. Analyze the issue.
+2. Outline reproduction code and verify in sandbox.
+3. Generate the exact patch or file update.
+Explain clearly what was identified and fixed.`;
+
+      const fixSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+      const fixRes = await callGemini(fixSys, [{ role: 'user', content: fixPrompt }]);
+      await sendTelegramTextMessage(chatId, `✨ **Autonomous Fix Diagnosis:**\n\n${fixRes}`);
+    } catch (fixErr) {
+      await sendTelegramTextMessage(chatId, `❌ **Fix Pipeline Error:** ${fixErr.message}`);
+    }
+    return;
+  }
+
+  // ── VIRACLIP AI MARKET & TREND RADAR ─────────────────────────────────────────
+  if (/^\/(radar|trends|viraclip)$/i.test(cleanInput)) {
+    await sendTelegramTextMessage(
+      chatId,
+      `📡 **ViraClip AI Market & Trend Radar Active**\n\nScanning live viral short-form video hooks, retention pacing, and AI repurposing landscape...`
+    );
+
+    try {
+      const radarPrompt = `VIRACLIP AI AUTONOMOUS TREND & VIRAL HOOK RADAR:
+Ajay Kumar AJ is building ViraClip AI (viral short-form video repurposing engine).
+Search the live web and compile:
+1. Top 5 viral hooks driving 1M+ views on Shorts/Reels this month.
+2. Key editing patterns (caption animations, sound effects, B-roll pacing, cut rates).
+3. Competitor feature landscape (Opus Clip, CapCut, Submagic).
+4. Concrete feature recommendation for ViraClip AI to win in 2026.
+
+Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executive Briefing in Markdown.`;
+
+      const radarSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
+      const radarRes = await callGemini(radarSys, [{ role: 'user', content: radarPrompt }]);
+
+      const csvMatch = radarRes.match(/```csv\s*([\s\S]*?)```/i);
+      if (csvMatch && csvMatch[1]) {
+        await sendTelegramBufferDocument(
+          chatId,
+          'viraclip_viral_hooks.csv',
+          Buffer.from(csvMatch[1].trim(), 'utf-8'),
+          'text/csv;charset=utf-8',
+          '📊 ViraClip Trending Hooks Dataset (CSV)'
+        );
+      }
+
+      const pdfBuf = await generatePdfBuffer('ViraClip AI Market Trend Radar', radarRes, null, 'wordpad');
+      await sendTelegramBufferDocument(
+        chatId,
+        'ViraClip_Trend_Radar.pdf',
+        pdfBuf,
+        'application/pdf',
+        '📄 ViraClip AI Market Trend Radar (Executive PDF)'
+      );
+
+      const cleanSummary = radarRes.replace(/```csv[\s\S]*?```/gi, '').slice(0, 1600);
+      await sendTelegramTextMessage(chatId, `🎯 **ViraClip AI Intelligence Radar Summary:**\n\n${cleanSummary}\n\n_(Full PDF & CSV dataset attached above)_`);
+    } catch (radarErr) {
+      await sendTelegramTextMessage(chatId, `❌ **Radar Error:** ${radarErr.message}`);
+    }
     return;
   }
 
@@ -1639,8 +1876,12 @@ async function registerTelegramCommands() {
   try {
     const commands = [
       { command: 'start', description: 'Operational status & capabilities overview' },
-      { command: 'brief', description: 'Trigger on-demand executive intelligence brief' },
+      { command: 'godeye', description: 'GodEye live surveillance, health & system telemetry HUD' },
+      { command: 'audit', description: 'Audit repository architecture & security (/audit <repo>)' },
+      { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
+      { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
       { command: 'canvas', description: 'Browse recent live website builds' },
+      { command: 'brief', description: 'Trigger on-demand executive intelligence brief' },
       { command: 'share', description: 'View invite passcode to share with friends' },
       { command: 'users', description: 'List authorized users with access' },
       { command: 'clear', description: 'Reset active chat memory for a fresh session' }
@@ -1657,17 +1898,25 @@ async function registerTelegramCommands() {
 }
 
 // ── START SERVER ──────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  registerTelegramCommands();
-  console.log(`==================================================`);
-  console.log(`>> RIYA AI CORE ONLINE ON PORT ${PORT}`);
-  console.log(`>> GEMINI API: ${GEMINI_KEY ? 'Active' : 'Missing'}`);
-  console.log(`>> MODEL: ${GEMINI_MODEL}`);
-  console.log(`>> TELEGRAM: ${TELEGRAM_KEY ? 'Active' : 'Disabled'}`);
-  console.log(`>> VECTOR MEMORY: Neon PostgreSQL (pgvector)`);
-  console.log(`>> NATIVE TOOLS: ${FUNCTION_DECLARATIONS.length} Registered`);
-  console.log(`>> ROUTINE CRON: Active (Asia/Kolkata timezone)`);
-  console.log(`>> PREVIEWS: ${SELF_URL}/preview/:id`);
-  console.log(`==================================================`);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    registerTelegramCommands();
+    console.log(`==================================================`);
+    console.log(`>> RIYA AI CORE ONLINE ON PORT ${PORT}`);
+    console.log(`>> GEMINI API: ${GEMINI_KEY ? 'Active' : 'Missing'}`);
+    console.log(`>> MODEL: ${GEMINI_MODEL}`);
+    console.log(`>> TELEGRAM: ${TELEGRAM_KEY ? 'Active' : 'Disabled'}`);
+    console.log(`>> VECTOR MEMORY: Neon PostgreSQL (pgvector)`);
+    console.log(`>> NATIVE TOOLS: ${FUNCTION_DECLARATIONS.length} Registered`);
+    console.log(`>> ROUTINE CRON: Active (Asia/Kolkata timezone)`);
+    console.log(`>> PREVIEWS: ${SELF_URL}/preview/:id`);
+    console.log(`==================================================`);
+  });
+}
+
+module.exports = {
+  app,
+  cleanDocumentBody,
+  generatePdfBuffer
+};

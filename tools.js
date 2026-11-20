@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { runInSandbox } = require('./sandbox');
+const { godEye } = require('./godeye');
 
-// ── GEMINI NATIVE FUNCTION DECLARATIONS (EXPANDED HERMES-CLASS TOOLKIT) ───────
+// ── GEMINI NATIVE FUNCTION DECLARATIONS (STARK TRINITY HERMES-CLASS TOOLKIT) ──
 const FUNCTION_DECLARATIONS = [
   {
     name: 'run_sandbox_code',
@@ -100,7 +101,8 @@ const FUNCTION_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         title: { type: 'STRING', description: 'Title of the executive report' },
-        markdown_content: { type: 'STRING', description: 'Structured markdown report content with sections, headings, bullet points' }
+        markdown_content: { type: 'STRING', description: 'Structured markdown report content with sections, headings, bullet points' },
+        style: { type: 'STRING', description: 'Style of the PDF: "wordpad" (minimal B&W) or "modern" (executive slate)' }
       },
       required: ['title', 'markdown_content']
     }
@@ -118,6 +120,19 @@ const FUNCTION_DECLARATIONS = [
     }
   },
   {
+    name: 'github_get_repo_tree',
+    description: 'Recursively fetch the full directory and file tree of any GitHub repository. Use this to audit codebase architecture and locate specific files.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        owner: { type: 'STRING', description: 'GitHub username or org (default: Ajaykumar106)' },
+        repo: { type: 'STRING', description: 'Repository name (e.g. Riya)' },
+        branch: { type: 'STRING', description: 'Branch name (default: main)' }
+      },
+      required: ['repo']
+    }
+  },
+  {
     name: 'github_read_file',
     description: 'Read the contents of a file from any GitHub repository via GitHub REST API.',
     parameters: {
@@ -129,6 +144,19 @@ const FUNCTION_DECLARATIONS = [
         branch: { type: 'STRING', description: 'Branch name (default: main)' }
       },
       required: ['repo', 'path']
+    }
+  },
+  {
+    name: 'github_search_code',
+    description: 'Search repository source code for functions, keywords, or error strings using GitHub code search.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        owner: { type: 'STRING', description: 'GitHub username or org (default: Ajaykumar106)' },
+        repo: { type: 'STRING', description: 'Repository name (e.g. Riya)' },
+        query: { type: 'STRING', description: 'Code search query or keyword' }
+      },
+      required: ['repo', 'query']
     }
   },
   {
@@ -145,6 +173,40 @@ const FUNCTION_DECLARATIONS = [
         branch: { type: 'STRING', description: 'Branch name (default: main)' }
       },
       required: ['repo', 'path', 'content', 'message']
+    }
+  },
+  {
+    name: 'github_create_pull_request',
+    description: 'Create a new Pull Request on a GitHub repository.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        owner: { type: 'STRING', description: 'GitHub username or org (default: Ajaykumar106)' },
+        repo: { type: 'STRING', description: 'Repository name (e.g. Riya)' },
+        title: { type: 'STRING', description: 'Pull request title' },
+        head: { type: 'STRING', description: 'Source branch containing changes' },
+        base: { type: 'STRING', description: 'Target branch (default: main)' },
+        body: { type: 'STRING', description: 'Detailed pull request description' }
+      },
+      required: ['repo', 'title', 'head']
+    }
+  },
+  {
+    name: 'system_telemetry',
+    description: 'Query GodEye real-time system metrics, memory RSS, Neon DB latency, and uptime status.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {}
+    }
+  },
+  {
+    name: 'market_trend_radar',
+    description: 'Scrape and analyze live viral short-form video hooks, editing patterns, and AI tools for ViraClip AI.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        category: { type: 'STRING', description: 'Focus area: viral_hooks, editing_styles, ai_tools, or general' }
+      }
     }
   }
 ];
@@ -248,7 +310,7 @@ async function extractWebPage(url) {
       headers: {
         'Accept': 'text/plain',
         'X-Return-Format': 'markdown',
-        'User-Agent': 'Riya-Agent/3.0'
+        'User-Agent': 'Riya-Agent/3.2'
       }
     });
     if (jinaRes.ok) {
@@ -306,6 +368,10 @@ async function executeTool(toolName, toolArgs, context = {}) {
 
   try {
     switch (toolName) {
+      case 'system_telemetry': {
+        return godEye.getTelemetry();
+      }
+
       case 'web_extract': {
         return await extractWebPage(toolArgs.url);
       }
@@ -390,10 +456,11 @@ async function executeTool(toolName, toolArgs, context = {}) {
       case 'generate_pdf_report': {
         const title = toolArgs.title || 'Executive Intelligence Report';
         const content = toolArgs.markdown_content || '';
+        const style = toolArgs.style === 'wordpad' ? 'wordpad' : 'modern';
         if (generatePdfBuffer && sendTelegramBufferDocument && chatId) {
-          const pdfBuf = await generatePdfBuffer(title, content);
+          const pdfBuf = await generatePdfBuffer(title, content, null, style);
           const safeName = title.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 25) + '.pdf';
-          await sendTelegramBufferDocument(chatId, safeName, pdfBuf, 'application/pdf', `📄 ${title} (PDF Document)`);
+          await sendTelegramBufferDocument(chatId, safeName, pdfBuf, 'application/pdf', `📄 ${title} (${style === 'wordpad' ? 'Clean WordPad Document' : 'Executive PDF'})`);
           return { success: true, filename: safeName, bytes: pdfBuf.length, sentToTelegram: true };
         }
         return { success: true, note: 'PDF generation prepared.' };
@@ -419,6 +486,36 @@ async function executeTool(toolName, toolArgs, context = {}) {
         return { success: true, live_url: liveUrl, preview_id: siteId, title };
       }
 
+      case 'github_get_repo_tree': {
+        const owner = toolArgs.owner || 'Ajaykumar106';
+        const repo = toolArgs.repo || 'Riya';
+        const branch = toolArgs.branch || 'main';
+
+        const token = process.env.GITHUB_TOKEN || '';
+        const headers = { 'User-Agent': 'Riya-Agent/3.2' };
+        if (token) headers['Authorization'] = `token ${token}`;
+
+        const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+          return { error: `GitHub API error: ${res.status} ${res.statusText}` };
+        }
+        const data = await res.json();
+        const cleanTree = (data.tree || [])
+          .filter(item => {
+            const p = item.path;
+            return !p.startsWith('node_modules/') && !p.startsWith('.git/') && !p.startsWith('.gemini/');
+          })
+          .map(item => ({ path: item.path, type: item.type, size: item.size }));
+
+        return {
+          repo: `${owner}/${repo}`,
+          branch,
+          totalFiles: cleanTree.length,
+          tree: cleanTree.slice(0, 150)
+        };
+      }
+
       case 'github_read_file': {
         const owner = toolArgs.owner || 'Ajaykumar106';
         const repo = toolArgs.repo || 'Riya';
@@ -430,7 +527,7 @@ async function executeTool(toolName, toolArgs, context = {}) {
         }
 
         const token = process.env.GITHUB_TOKEN || '';
-        const headers = { 'User-Agent': 'Riya-Agent' };
+        const headers = { 'User-Agent': 'Riya-Agent/3.2' };
         if (token) headers['Authorization'] = `token ${token}`;
 
         const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`, { headers });
@@ -442,12 +539,35 @@ async function executeTool(toolName, toolArgs, context = {}) {
         return { path: filePath, size: ghData.size, sha: ghData.sha, content: fileText };
       }
 
+      case 'github_search_code': {
+        const owner = toolArgs.owner || 'Ajaykumar106';
+        const repo = toolArgs.repo || 'Riya';
+        const query = toolArgs.query || '';
+
+        const token = process.env.GITHUB_TOKEN || '';
+        const headers = { 'User-Agent': 'Riya-Agent/3.2' };
+        if (token) headers['Authorization'] = `token ${token}`;
+
+        const searchUrl = `https://api.github.com/search/code?q=${encodeURIComponent(query)}+repo:${owner}/${repo}`;
+        const searchRes = await fetch(searchUrl, { headers });
+        if (!searchRes.ok) {
+          return { error: `GitHub Code Search error: ${searchRes.status} ${searchRes.statusText}` };
+        }
+        const searchData = await searchRes.json();
+        const items = (searchData.items || []).slice(0, 10).map(i => ({
+          name: i.name,
+          path: i.path,
+          html_url: i.html_url
+        }));
+        return { totalMatches: searchData.total_count, items };
+      }
+
       case 'github_commit_file': {
         const owner = toolArgs.owner || 'Ajaykumar106';
         const repo = toolArgs.repo || 'Riya';
         const filePath = toolArgs.path || '';
         const content = toolArgs.content || '';
-        const message = toolArgs.message || `Update ${filePath} via Riya AI`;
+        const message = toolArgs.message || `Update ${filePath} via Riya AI Autopilot`;
         const branch = toolArgs.branch || 'main';
 
         if (isSensitiveOrTraversingPath(filePath)) {
@@ -455,7 +575,6 @@ async function executeTool(toolName, toolArgs, context = {}) {
         }
 
         const token = process.env.GITHUB_TOKEN || '';
-
         if (!token) {
           return {
             error: 'GITHUB_TOKEN is not set in Render environment variables. Set GITHUB_TOKEN to grant Riya write/commit permission to your repositories.'
@@ -463,7 +582,7 @@ async function executeTool(toolName, toolArgs, context = {}) {
         }
 
         const headers = {
-          'User-Agent': 'Riya-Agent',
+          'User-Agent': 'Riya-Agent/3.2',
           'Authorization': `token ${token}`,
           'Content-Type': 'application/json'
         };
@@ -497,6 +616,52 @@ async function executeTool(toolName, toolArgs, context = {}) {
           success: true,
           commitUrl: putData.commit?.html_url,
           fileUrl: putData.content?.html_url
+        };
+      }
+
+      case 'github_create_pull_request': {
+        const owner = toolArgs.owner || 'Ajaykumar106';
+        const repo = toolArgs.repo || 'Riya';
+        const title = toolArgs.title || 'Autonomous Optimization via Riya AI';
+        const head = toolArgs.head || '';
+        const base = toolArgs.base || 'main';
+        const body = toolArgs.body || 'Autonomous Pull Request created by Riya FRIDAY Engine.';
+
+        const token = process.env.GITHUB_TOKEN || '';
+        if (!token) {
+          return { error: 'GITHUB_TOKEN is not set in Render environment variables.' };
+        }
+
+        const headers = {
+          'User-Agent': 'Riya-Agent/3.2',
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/json'
+        };
+
+        const prRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ title, head, base, body })
+        });
+        const prData = await prRes.json();
+        if (!prRes.ok) {
+          return { error: prData.message || 'Pull request creation failed' };
+        }
+        return {
+          success: true,
+          prNumber: prData.number,
+          prUrl: prData.html_url,
+          title: prData.title
+        };
+      }
+
+      case 'market_trend_radar': {
+        const category = toolArgs.category || 'viral_hooks';
+        return {
+          category,
+          timestamp: new Date().toISOString(),
+          status: 'ready',
+          note: 'Trigger live search for viral hooks, retention editing patterns, and video AI landscape.'
         };
       }
 
@@ -544,7 +709,7 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
       { function_declarations: FUNCTION_DECLARATIONS }
     ],
     generationConfig: {
-      temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.4'),
+      temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.3'),
       topP: parseFloat(process.env.GEMINI_TOP_P || '0.95'),
       topK: parseInt(process.env.GEMINI_TOP_K || '40', 10),
       maxOutputTokens: parseInt(process.env.GEMINI_MAX_TOKENS || '8192', 10)
@@ -565,7 +730,7 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
   ].filter(Boolean);
 
   let turns = 0;
-  const maxTurns = 5;
+  const maxTurns = 6;
   const toolSideEffects = {};
 
   while (turns < maxTurns) {
@@ -613,6 +778,9 @@ async function callGeminiAgent(sysPrompt, messagesList, context = {}, fallbackFn
       }
       if (name === 'run_sandbox_code') {
         toolSideEffects.sandboxOutput = toolOutput;
+      }
+      if (name === 'system_telemetry') {
+        toolSideEffects.telemetry = toolOutput;
       }
 
       payload.contents.push({
