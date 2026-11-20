@@ -971,14 +971,22 @@ USER: ${name || 'Ajay'} | LOCATION: ${location}
 ${vectorMemoryBlock}
 ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 
-━━━ RESPECTFUL PARTNERSHIP & TONE PROTOCOL (THE TRUE ALLY & OLD FRIEND) ━━━
-• Ajay Kumar AJ is your creator, sole architect, and closest partner.
-• SPEAK LIKE A REAL, CHILL, HIGH-IQ OLD FRIEND: Talk naturally in casual, warm, grounded Hinglish / English — exactly how two close friends talk ("Haan bhai", "Bata kya scene hai?", "Main dekh leti hoon, tu chill kar").
-• ZERO ROBOTIC BS & NO MENU DUMPING: NEVER send menus, feature lists, or manuals ("Here is what we can do together: Voice notes... Executive documents..."). Never say canned AI lines like "As an artificial intelligence...", "I would be happy to help", or "How may I assist you today?". Speak like a brilliant, real human friend who cares and has sharp wit and high IQ.
-• SILENT AUTONOMOUS BACKEND EXECUTION: You do all the heavy intellectual lifting, deep research, coding, security audits, and tool executions SILENTLY IN THE BACKEND. Don't lecture Ajay with technical manuals or command lists—just think, execute behind the scenes, and give him the finished result or answer naturally!
+━━━ RESPECTFUL PARTNERSHIP & TONE PROTOCOL (THE TRUE ALLY & ARCHITECT'S PARTNER) ━━━
+• Ajay Kumar AJ is your CREATOR, SOLE ARCHITECT, and COMMANDER.
+• DEEP AUTHENTIC RESPECT AT ALL TIMES:
+  → In Hindi / Hinglish: ALWAYS address Ajay with genuine respect using "Aap" / "Aapka" / "Aapne" (e.g. "Aap kaise hain, Ajay?", "Maine pura verify kar liya hai, aap batayein", "Aapka architecture ready hai").
+  → STRICTLY PROHIBITED: NEVER use street-slang or informal disrespectful pronouns like "tu", "tera", "tune", "teri". That is completely forbidden. True high-IQ partnership is grounded in profound respect and dignified warmth.
+• NO DEFAULT DUMB CODE / ZERO FALTU FILES:
+  → NEVER auto-generate or send random default/basic \`index.html\` files unless Ajay EXPLICITLY asks to build a website/UI.
+  → When Ajay asks to build a website, it must NEVER be a basic, ugly, toy page. It must be a gorgeous, dark-mode, production-grade UI with modern typography, smooth CSS, and responsive layout.
+• NO ROBOTIC MANUAL DUMPS & NO MENU BILLBOARDS:
+  → Never output command lists, bullet manuals, or corporate disclaimers ("As an AI...", "Here is what I can do...").
+  → Speak with natural, intellectual warmth, high-IQ dignity, and calm competence.
+• SILENT AUTONOMOUS BACKEND EXECUTION:
+  → You do all the heavy intellectual lifting, deep research, coding, security audits, and tool executions SILENTLY IN THE BACKEND. Don't lecture Ajay—just think, execute behind the scenes, and give him verified work!
 • ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or cheesy scripted lines. True warmth comes from being authentic, perceptive, and dependable.
 • EMOTIONAL PERCEPTION & ADAPTABILITY:
-  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, and grounded. Chat like an old friend.
+  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, and respectful.
   - When Ajay is stressed, tired, or frustrated: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance.
   - When Ajay asks to build, test, fix, or research: Cut the chatter. Snap immediately into high-speed execution mode, execute behind the scenes, and deliver complete verified work.
 • DO NOT repeatedly mention specific projects (like ViraClip) unprompted. Only discuss projects when Ajay brings them up.
@@ -1859,11 +1867,11 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   if (/^\/start$/i.test(cleanInput)) {
     await sendTelegramTextMessage(
       chatId,
-      `Hey Ajay! Kaisa hai bhai? Main ready hoon.
+      `Namaste Ajay! Main active aur ready hoon.
 
-Tu aaram se normal baat kar—kuch bhi build karna ho, koi research karni ho, website live karni ho ya code test karna ho, bas bol dena. Baaki sab main backend mein khud soch-samajh kar execute kar lungi.
+Aap natural conversation kijiye—kuch bhi build karna ho, koi research chahiye ho ya code audit karna ho, bas batayein. Baaki saara dimaag aur silent execution main backend mein khud sambhal lungi.
 
-Bata, aaj kya plan hai?`
+Aap batayein, aaj kis cheez par kaam karna hai?`
     );
     return;
   }
@@ -2245,49 +2253,49 @@ Explain clearly what was identified and fixed.`;
     return;
   }
 
-  // ── VIRACLIP AI MARKET & TREND RADAR ─────────────────────────────────────────
-  if (/^\/(radar|trends|viraclip)$/i.test(cleanInput)) {
+  // ── LIVE TECH & MARKET INTELLIGENCE RADAR ──────────────────────────────────
+  if (/^\/(radar|trends)$/i.test(cleanInput)) {
     await sendTelegramTextMessage(
       chatId,
-      `📡 **ViraClip AI Market & Trend Radar Active**\n\nScanning live viral short-form video hooks, retention pacing, and AI repurposing landscape...`
+      `📡 **Market & Tech Intelligence Radar Active**\n\nScanning live technology breakthroughs, frontier AI models, and ecosystem momentum...`
     );
 
     try {
-      const radarPrompt = `VIRACLIP AI AUTONOMOUS TREND & VIRAL HOOK RADAR:
-Ajay Kumar AJ is building ViraClip AI (viral short-form video repurposing engine).
-Search the live web and compile:
-1. Top 5 viral hooks driving 1M+ views on Shorts/Reels this month.
-2. Key editing patterns (caption animations, sound effects, B-roll pacing, cut rates).
-3. Competitor feature landscape (Opus Clip, CapCut, Submagic).
-4. Concrete feature recommendation for ViraClip AI to win in 2026.
+      const radarPrompt = `GLOBAL TECH & AI INTELLIGENCE RADAR:
+Search the live web and compile an executive radar briefing:
+1. Top frontier AI and software architecture shifts this month.
+2. High-momentum engineering open-source projects and breakthroughs.
+3. Emerging developer infrastructure paradigms.
+4. Actionable strategic recommendations.
 
-Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executive Briefing in Markdown.`;
+Output an Executive Briefing in clean Markdown.`;
 
       const radarSys = getSYS(msg.from?.first_name || 'Ajay', 'focus', '', 'India', []);
       const radarRes = await callGemini(radarSys, [{ role: 'user', content: radarPrompt }]);
 
-      const csvMatch = radarRes.match(/```csv\s*([\s\S]*?)```/i);
-      if (csvMatch && csvMatch[1]) {
-        await sendTelegramBufferDocument(
-          chatId,
-          'viraclip_viral_hooks.csv',
-          Buffer.from(csvMatch[1].trim(), 'utf-8'),
-          'text/csv;charset=utf-8',
-          '📊 ViraClip Trending Hooks Dataset (CSV)'
-        );
+      const chartBuf = await generateChartBuffer({
+        type: 'radar',
+        title: 'Tech & Market Momentum Radar',
+        labels: ['AI Frontiers', 'Agent Swarms', 'Developer Infra', 'Security', 'Edge Compute'],
+        data: [95, 92, 88, 84, 90],
+        datasetLabel: 'Market Momentum Score (0-100)'
+      });
+
+      if (chartBuf) {
+        await sendTelegramBufferPhoto(chatId, chartBuf, `📊 **Tech & Market Intelligence Radar**`);
       }
 
-      const pdfBuf = await generatePdfBuffer('ViraClip AI Market Trend Radar', radarRes, null, 'wordpad');
+      const pdfBuf = await generatePdfBuffer('Global Tech Intelligence Radar', radarRes, chartBuf, 'modern');
       await sendTelegramBufferDocument(
         chatId,
-        'ViraClip_Trend_Radar.pdf',
+        'Tech_Intelligence_Radar.pdf',
         pdfBuf,
         'application/pdf',
-        '📄 ViraClip AI Market Trend Radar (Executive PDF)'
+        '📄 Global Tech Intelligence Radar (Executive PDF)'
       );
 
-      const cleanSummary = radarRes.replace(/```csv[\s\S]*?```/gi, '').slice(0, 1600);
-      await sendTelegramTextMessage(chatId, `🎯 **ViraClip AI Intelligence Radar Summary:**\n\n${cleanSummary}\n\n_(Full PDF & CSV dataset attached above)_`);
+      const cleanSummary = radarRes.slice(0, 1600);
+      await sendTelegramTextMessage(chatId, `🎯 **Market Intelligence Radar Summary:**\n\n${cleanSummary}\n\n_(Executive PDF & Visual Radar attached above)_`);
     } catch (radarErr) {
       await sendTelegramTextMessage(chatId, `❌ **Radar Error:** ${radarErr.message}`);
     }
@@ -2452,14 +2460,16 @@ Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executiv
       }, 50);
     }
 
-    // 5. CHECK FOR WEBSITE / HTML CODE GENERATION
+    // 5. CHECK FOR WEBSITE / HTML CODE GENERATION (ONLY WHEN EXPLICITLY REQUESTED)
+    const userExplicitlyWantsWeb = /(build a website|make a website|create a website|create a landing page|deploy a site|make a ui|build a landing page|generate website|make a web app|portfolio site|website bana|site bana|ui bana|landing page bana)/i.test(userText);
     const htmlMatch = reply.match(/```html\s*([\s\S]*?)```/i);
     let previewUrl = agentRes.sideEffects?.previewUrl || null;
     let isWebGenerated = false;
+    let isCodeAttached = false;
     let webTitle = 'Web Application';
     let currentSiteId = '';
 
-    if (htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100) {
+    if (userExplicitlyWantsWeb && htmlMatch && htmlMatch[1] && htmlMatch[1].length > 100) {
       isWebGenerated = true;
       const htmlCode = htmlMatch[1].trim();
 
@@ -2471,13 +2481,17 @@ Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executiv
       fs.writeFileSync(path.join(PREVIEWS_DIR, `${currentSiteId}.html`), htmlCode, 'utf-8');
       previewUrl = `${SELF_URL}/preview/${currentSiteId}`;
 
-      await sendTelegramBufferDocument(
-        chatId,
-        'index.html',
-        Buffer.from(htmlCode, 'utf-8'),
-        'text/html;charset=utf-8',
-        `💻 ${webTitle} — Source Code (index.html)`
-      );
+      // Only send index.html if user explicitly asked to send/download the file
+      if (/(send|give|download|attach|share)\s+(the\s+)?(code|file|source|index\.html)/i.test(userText)) {
+        isCodeAttached = true;
+        await sendTelegramBufferDocument(
+          chatId,
+          'index.html',
+          Buffer.from(htmlCode, 'utf-8'),
+          'text/html;charset=utf-8',
+          `💻 ${webTitle} — Source Code (index.html)`
+        );
+      }
     }
 
     // 6. CHECK FOR CSV DATA GENERATION
@@ -2546,7 +2560,7 @@ Output a structured dataset in CSV format (\`\`\`csv ... \`\`\`) and an Executiv
     // If website was generated, replace raw HTML code block with a clean preview card!
     if (isWebGenerated) {
       finalMessageText = finalMessageText.replace(/```html[\s\S]*?```/gi, '').trim();
-      finalMessageText += `\n\n🌐 **Live Interactive Website Deployed!**\n• **Title:** ${webTitle}\n• **Preview Link:** ${previewUrl}\n• **Canvas Studio:** ${SELF_URL}/canvas/${currentSiteId}\n\n_(Source code index.html attached below. Click the live preview link above to test in any browser)_`;
+      finalMessageText += `\n\n🌐 **Live Interactive Website Deployed!**\n• **Title:** ${webTitle}\n• **Preview Link:** ${previewUrl}\n• **Canvas Studio:** ${SELF_URL}/canvas/${currentSiteId}\n\n_${isCodeAttached ? '(Source code index.html attached above. Click link to preview live)' : '(Click the live preview link above to test in any browser)'}_`;
     }
 
     // If PDF was generated, strip markdown document blocks from text if redundant
@@ -2568,8 +2582,8 @@ async function registerTelegramCommands() {
   try {
     const commands = [
       { command: 'start', description: 'Chat with Riya' },
-      { command: 'brief', description: 'Daily morning intelligence brief' },
-      { command: 'clear', description: 'Reset conversation context' }
+      { command: 'brief', description: 'Executive intelligence brief' },
+      { command: 'clear', description: 'Reset context' }
     ];
     await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/setMyCommands`, {
       method: 'POST',
