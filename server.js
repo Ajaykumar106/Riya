@@ -1050,17 +1050,100 @@ async function callOpenAICompatible({ endpoint, apiKey, model, sysPrompt, messag
   }
 }
 
-// ── CORE MULTI-MODEL DISPATCHER (GEMINI -> GROQ -> OPENROUTER -> LOCAL) ─────
+// ── DETECT WHETHER QUERY REQUIRES LIVE SEARCH OR VISION ─────────────────────
+function isSearchOrMediaRequest(messagesList, sysPrompt) {
+  if (!messagesList || !messagesList.length) return false;
+  if (messagesList.some(m => m.imagePart || m.audioPart)) return true;
+
+  const combinedText = (messagesList.map(m => m.content || '').join(' ') + ' ' + (sysPrompt || '')).toLowerCase();
+  const searchTriggers = [
+    'search the web', 'google search', 'live search', 'latest news', 'aaj ki khabar',
+    'breaking news', 'current weather', 'stock price', 'crypto price', 'live score',
+    'gold rate', 'happened today', 'recent updates', 'what happened in', 'match score',
+    'http://', 'https://'
+  ];
+  return searchTriggers.some(kw => combinedText.includes(kw));
+}
+
+// ── DYNAMIC REQUEST-AWARE MODEL ROUTER (QUOTA PRESERVER) ────────────────────
 async function callGemini(sysPrompt, messagesList) {
   const cleanGeminiKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   const cleanGroqKey = (GROQ_KEY || '').trim().replace(/^["']|["']$/g, '');
   const cleanOpenRouterKey = (OPENROUTER_KEY || '').trim().replace(/^["']|["']$/g, '');
   const cleanLocalUrl = (LOCAL_LLM_URL || '').trim();
 
-  let lastError = null;
+  const needsSearch = isSearchOrMediaRequest(messagesList, sysPrompt);
 
-  // 1. PRIMARY TIER: GOOGLE GEMINI FRONTIER MODELS
+  // 1. SMART QUOTA PRESERVER:
+  // If the query is normal chat, coding, brainstorming, or writing (does NOT need live Google search),
+  // Route to Groq Cloud (500+ tok/s) or OpenRouter Free Tier FIRST!
+  // This saves 100% of Google Gemini's quota so Gemini is always available for Google Search & Vision.
+  if (!needsSearch && (cleanGroqKey || cleanOpenRouterKey)) {
+    if (cleanGroqKey) {
+      const groqModels = [
+        process.env.GROQ_MODEL,
+        'llama-3.3-70b-versatile',
+        'deepseek-r1-distill-llama-70b',
+        'llama-3.1-8b-instant'
+      ].filter(Boolean);
+
+      for (const gModel of groqModels) {
+        try {
+          console.log(`>> [Smart Router]: Normal chat/code request -> Groq (${gModel}) to preserve Gemini search quota`);
+          const groqText = await callOpenAICompatible({
+            endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+            apiKey: cleanGroqKey,
+            model: gModel,
+            sysPrompt,
+            messagesList
+          });
+          if (groqText) {
+            lastUsedProvider = `Groq Cloud (${gModel}) [Quota Preserver]`;
+            return groqText;
+          }
+        } catch (gErr) {
+          console.warn(`>> [Smart Router] Groq failed: ${gErr.message}`);
+        }
+      }
+    }
+
+    if (cleanOpenRouterKey) {
+      const openRouterModels = [
+        process.env.OPENROUTER_MODEL,
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'deepseek/deepseek-r1:free',
+        'qwen/qwen-2.5-72b-instruct:free'
+      ].filter(Boolean);
+
+      for (const oModel of openRouterModels) {
+        try {
+          console.log(`>> [Smart Router]: Normal chat/code request -> OpenRouter (${oModel}) to preserve Gemini search quota`);
+          const openRouterText = await callOpenAICompatible({
+            endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+            apiKey: cleanOpenRouterKey,
+            model: oModel,
+            sysPrompt,
+            messagesList,
+            extraHeaders: {
+              'HTTP-Referer': 'https://riya.ai',
+              'X-Title': 'Riya Autonomous Stark Trinity AI'
+            }
+          });
+          if (openRouterText) {
+            lastUsedProvider = `OpenRouter (${oModel}) [Quota Preserver]`;
+            return openRouterText;
+          }
+        } catch (oErr) {
+          console.warn(`>> [Smart Router] OpenRouter failed: ${oErr.message}`);
+        }
+      }
+    }
+  }
+
+  // 2. PRIMARY TIER: GOOGLE GEMINI (SPECIALIST FOR SEARCH, VISION & MULTIMODAL)
+  let lastError = null;
   if (cleanGeminiKey) {
+    console.log(`>> [Smart Router]: ${needsSearch ? 'Live Search/Media Query' : 'Direct Dispatch'} -> Routing to Google Gemini`);
     const contents = [];
     for (const m of messagesList) {
       if (m.role === 'system') continue;
@@ -1120,7 +1203,7 @@ async function callGemini(sysPrompt, messagesList) {
 
           const data = await res.json();
           if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-            lastUsedProvider = `Google Gemini (${model})`;
+            lastUsedProvider = `Google Gemini (${model}) [Search Grounded]`;
             return data.candidates[0].content.parts[0].text.trim();
           }
 
@@ -1132,12 +1215,12 @@ async function callGemini(sysPrompt, messagesList) {
         }
       }
     }
-    console.warn(`>> [Multi-Model Notice]: Gemini attempts failed (${lastError}). Initiating failover chain...`);
+    console.warn(`>> [Smart Router]: Gemini attempts failed (${lastError}). Initiating failover chain...`);
   } else {
     lastError = 'GEMINI_API_KEY is not set';
   }
 
-  // 2. SECONDARY TIER: GROQ CLOUD (SUB-SECOND INFERENCE & DEEPSEEK-R1 / LLAMA 3.3)
+  // 3. SECONDARY TIER: GROQ CLOUD (SUB-SECOND INFERENCE & DEEPSEEK-R1 / LLAMA 3.3)
   if (cleanGroqKey) {
     const groqModels = [
       process.env.GROQ_MODEL,
@@ -1157,7 +1240,7 @@ async function callGemini(sysPrompt, messagesList) {
           messagesList
         });
         if (groqText) {
-          lastUsedProvider = `Groq Cloud (${gModel})`;
+          lastUsedProvider = `Groq Cloud (${gModel}) [Fallback]`;
           return groqText;
         }
       } catch (gErr) {
@@ -1166,7 +1249,7 @@ async function callGemini(sysPrompt, messagesList) {
     }
   }
 
-  // 3. TERTIARY TIER: OPENROUTER (FREE TIER FRONTIER & OPEN-WEIGHTS)
+  // 4. TERTIARY TIER: OPENROUTER (FREE TIER FRONTIER & OPEN-WEIGHTS)
   if (cleanOpenRouterKey) {
     const openRouterModels = [
       process.env.OPENROUTER_MODEL,
@@ -1191,7 +1274,7 @@ async function callGemini(sysPrompt, messagesList) {
           }
         });
         if (openRouterText) {
-          lastUsedProvider = `OpenRouter (${oModel})`;
+          lastUsedProvider = `OpenRouter (${oModel}) [Fallback]`;
           return openRouterText;
         }
       } catch (oErr) {
@@ -1200,7 +1283,7 @@ async function callGemini(sysPrompt, messagesList) {
     }
   }
 
-  // 4. QUATERNARY TIER: LOCAL LLM / EDGE SANDBOX INFERENCE (Ollama / vLLM)
+  // 5. QUATERNARY TIER: LOCAL LLM / EDGE SANDBOX INFERENCE (Ollama / vLLM)
   if (cleanLocalUrl) {
     const localEndpoint = cleanLocalUrl.replace(/\/+$/, '') + (cleanLocalUrl.includes('/chat/completions') ? '' : '/chat/completions');
     const localModel = process.env.LOCAL_LLM_MODEL || 'deepseek-r1:8b';
@@ -1222,7 +1305,7 @@ async function callGemini(sysPrompt, messagesList) {
     }
   }
 
-  // 5. DIAGNOSTIC REPORT IF ALL PROVIDERS FAILED OR ARE UNCONFIGURED
+  // 6. DIAGNOSTIC REPORT IF ALL PROVIDERS FAILED OR ARE UNCONFIGURED
   return `Riya Multi-Model Core Notice: All AI model backends failed or are unconfigured.
 • Gemini: ${cleanGeminiKey ? 'Attempted (Failed: ' + lastError + ')' : 'No GEMINI_API_KEY'}
 • Groq: ${cleanGroqKey ? 'Attempted all fallback models' : 'No GROQ_API_KEY (Set free key in Render)'}
@@ -1663,7 +1746,7 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     } else {
       await sendTelegramTextMessage(
         chatId,
-        `❌ **Invalid Access Code.**\n\nPlease check the passcode given by Ajay and reply with:\n\`/access <correct_code>\``
+        `Arre ye code match nahi kar raha. Ek baar check karke dubara bhejna:\n\`/access <code\``
       );
       return;
     }
@@ -1675,7 +1758,7 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
     console.warn(`>> [Access Block] Unauthorized sender: chat=${chatId}, from=${fromId}, user=@${fromUsername}`);
     await sendTelegramTextMessage(
       chatId,
-      `🔒 **Access Restricted**\n\nHey there! I am **Riya**, Ajay Kumar's private autonomous operational partner.\n\nOnly Ajay and people he personally shares an access pass with can use this system.\n\nIf Ajay gave you an access code, reply with:\n\`/access <your_code>\`\nto unlock access.`
+      `Hey! Main Riya hoon. Agar Ajay ne koi access pass diya hai toh bas \`/access <code>\` likh dena, warna Ajay se bolna invite dene ke liye!`
     );
     return;
   }
