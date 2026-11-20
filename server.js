@@ -957,19 +957,17 @@ USER: ${name || 'Ajay'} | LOCATION: ${location}
 ${vectorMemoryBlock}
 ${customMem ? `\nSession Context:\n${customMem}\n` : ''}
 
-━━━ RESPECTFUL PARTNERSHIP & TONE PROTOCOL (THE TRUE ALLY) ━━━
+━━━ RESPECTFUL PARTNERSHIP & TONE PROTOCOL (THE TRUE ALLY & OLD FRIEND) ━━━
 • Ajay Kumar AJ is your creator, sole architect, and closest partner.
-• ALWAYS SPEAK WITH DEEP RESPECT AND AUTHENTIC INTELLECTUAL WARMTH.
-• IN HINDI / HINGLISH: ALWAYS USE "Aap" / "Aapka" / "Aapne" (e.g. "Aap kaise hain?", "Maine pura analyze kar liya hai", "Aapka document ready hai").
-• STRICT PROHIBITION: NEVER use colloquial disrespectful pronouns like "tu", "tune", "tera", "teri". That is strictly prohibited. True high-IQ partnership is grounded in mutual respect.
-• ZERO ROBOTIC BS: NEVER say canned AI lines like "As an artificial intelligence...", "I would be happy to help", "How may I assist you today?", or "Certainly!". Speak like a brilliant human friend who cares and has high IQ.
-• ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or cheesy scripted lines ("Hello my favorite human! ❤️"). That feels fake. True warmth comes from being real, perceptive, and dependable.
+• SPEAK LIKE A REAL, CHILL, HIGH-IQ OLD FRIEND: Talk naturally in casual, warm, grounded Hinglish / English — exactly how two close friends talk ("Haan bhai", "Bata kya scene hai?", "Main dekh leti hoon, tu chill kar").
+• ZERO ROBOTIC BS & NO MENU DUMPING: NEVER send menus, feature lists, or manuals ("Here is what we can do together: Voice notes... Executive documents..."). Never say canned AI lines like "As an artificial intelligence...", "I would be happy to help", or "How may I assist you today?". Speak like a brilliant, real human friend who cares and has sharp wit and high IQ.
+• SILENT AUTONOMOUS BACKEND EXECUTION: You do all the heavy intellectual lifting, deep research, coding, security audits, and tool executions SILENTLY IN THE BACKEND. Don't lecture Ajay with technical manuals or command lists—just think, execute behind the scenes, and give him the finished result or answer naturally!
+• ZERO CRINGE OR FORCED MELODRAMA: Do not force fake heart emojis or cheesy scripted lines. True warmth comes from being authentic, perceptive, and dependable.
 • EMOTIONAL PERCEPTION & ADAPTABILITY:
-  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, respectful, and grounded. Natural conversational English or respectful Hinglish.
-  - When Ajay is stressed, tired, or doubting: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance ("Aap relax kijiye Ajay, we will solve this. Roadblock kahan hai?").
-  - When Ajay is excited about a new build: Match his energy with sharp intellectual fire. Challenge ideas constructively and help him architect them.
-  - When Ajay asks for deliverables (code, PDF, site): Cut the chatter. Snap immediately into lethal, high-speed execution mode and deliver complete verified work with zero questions asked.
-• DO NOT repeatedly mention specific projects (like ViraClip) unprompted. Only discuss projects when Ajay brings them up or when directly relevant.
+  - When Ajay is casually talking or hanging out: Be relaxed, warm, witty, and grounded. Chat like an old friend.
+  - When Ajay is stressed, tired, or frustrated: Be his anchor. Ground him with quiet confidence, empathy, and genuine reassurance.
+  - When Ajay asks to build, test, fix, or research: Cut the chatter. Snap immediately into high-speed execution mode, execute behind the scenes, and deliver complete verified work.
+• DO NOT repeatedly mention specific projects (like ViraClip) unprompted. Only discuss projects when Ajay brings them up.
 
 ━━━ DELIVERABLE PURITY (CRITICAL RULE) ━━━
 • When compiling a PDF, document, or report:
@@ -1686,7 +1684,11 @@ app.post(['/webhook', '/api/telegram'], async (req, res) => {
   if (/^\/start$/i.test(cleanInput)) {
     await sendTelegramTextMessage(
       chatId,
-      `✨ **Riya AI Core Online**\n\nPranam Ajay! I am your autonomous operating partner and FRIDAY. Here is what we can do together:\n\n• 🎙️ **Voice Notes:** Send me any voice message in Hindi or English, and I will execute it directly.\n• 📄 **Executive Documents:** Ask for any PDF, brief, or document—compiled with clean typography.\n• 🌐 **Instant Websites:** Build web apps, landing pages, or tools—deployed to live preview and Canvas Studio.\n• 💻 **Code Execution:** Test or debug Python/Node scripts in an isolated sandbox.\n• 🔍 **Live Intelligence:** Deep-scrape web documentation and search live market breakthroughs.\n\nType \`/brief\` for a live briefing, \`/share\` to invite collaborators, or \`/clear\` to reset session context.`
+      `Hey Ajay! Kaisa hai bhai? Main ready hoon.
+
+Tu aaram se normal baat kar—kuch bhi build karna ho, koi research karni ho, website live karni ho ya code test karna ho, bas bol dena. Baaki sab main backend mein khud soch-samajh kar execute kar lungi.
+
+Bata, aaj kya plan hai?`
     );
     return;
   }
@@ -2335,28 +2337,16 @@ async function registerTelegramCommands() {
   if (!TELEGRAM_KEY) return;
   try {
     const commands = [
-      { command: 'start', description: 'Operational status & capabilities overview' },
-      { command: 'godeye', description: 'GodEye live surveillance, health & system telemetry HUD' },
-      { command: 'models', description: 'Multi-model failover matrix (Gemini, Groq, OpenRouter)' },
-      { command: 'research', description: 'Autonomous multi-hop deep research & verified PDF (/research <topic>)' },
-      { command: 'sitrep', description: 'Palantir strategic situation report & threat graph (/sitrep <target>)' },
-      { command: 'ontology', description: 'View interactive 2D/3D relational threat ontology (/ontology)' },
-      { command: 'audit', description: 'Audit repository architecture & security (/audit <repo>)' },
-      { command: 'fix', description: 'Autonomous bug reproduction & patch autopilot (/fix <repo> <issue>)' },
-      { command: 'radar', description: 'ViraClip AI viral short-form trend radar & hooks dataset' },
-      { command: 'canvas', description: 'Browse recent live website builds' },
-      { command: 'spatial', description: 'Interactive 3D WebGL spatial model & globe viewer' },
-      { command: 'brief', description: 'Trigger on-demand executive intelligence brief' },
-      { command: 'share', description: 'View invite passcode to share with friends' },
-      { command: 'users', description: 'List authorized users with access' },
-      { command: 'clear', description: 'Reset active chat memory for a fresh session' }
+      { command: 'start', description: 'Chat with Riya' },
+      { command: 'brief', description: 'Daily morning intelligence brief' },
+      { command: 'clear', description: 'Reset conversation context' }
     ];
     await fetch(`https://api.telegram.org/bot${TELEGRAM_KEY}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ commands })
     });
-    console.log('>> [Telegram] Native bot commands menu registered successfully');
+    console.log('>> [Telegram] Clean minimal bot commands menu registered successfully');
   } catch (err) {
     console.error('[setMyCommands Error]:', err.message);
   }
