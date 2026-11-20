@@ -83,6 +83,29 @@ const FUNCTION_DECLARATIONS = [
     }
   },
   {
+    name: 'generate_data_chart',
+    description: 'Generate an informative, high-resolution data chart or graph (bar, line, radar, pie) and deliver the visual image directly to Telegram.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: { type: 'STRING', description: 'Title of the chart' },
+        chart_type: { type: 'STRING', description: 'Type of chart: bar, line, radar, pie, or doughnut' },
+        labels: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'Category labels for the X-axis or radar points'
+        },
+        data: {
+          type: 'ARRAY',
+          items: { type: 'NUMBER' },
+          description: 'Numerical data points matching the labels'
+        },
+        dataset_label: { type: 'STRING', description: 'Legend label for the dataset' }
+      },
+      required: ['title', 'labels', 'data']
+    }
+  },
+  {
     name: 'recall_memory',
     description: 'Search long-term vector memory in Neon PostgreSQL for past facts, preferences, code snippets, or project details.',
     parameters: {
@@ -473,6 +496,44 @@ async function executeTool(toolName, toolArgs, context = {}) {
           await sendTelegramPhoto(chatId, imageUrl, `🎨 Generated: ${prompt.slice(0, 200)}`);
         }
         return { success: true, image_url: imageUrl, prompt, delivered_to_telegram: !!chatId };
+      }
+
+      case 'generate_data_chart': {
+        const title = toolArgs.title || 'Data Analysis';
+        const type = toolArgs.chart_type || 'bar';
+        const labels = toolArgs.labels || ['A', 'B', 'C'];
+        const data = toolArgs.data || [10, 20, 30];
+        const datasetLabel = toolArgs.dataset_label || 'Metrics';
+
+        const chartConfig = {
+          type,
+          data: {
+            labels,
+            datasets: [{
+              label: datasetLabel,
+              data,
+              backgroundColor: [
+                'rgba(56, 189, 248, 0.8)',
+                'rgba(99, 102, 241, 0.8)',
+                'rgba(168, 85, 247, 0.8)',
+                'rgba(34, 197, 94, 0.8)',
+                'rgba(249, 115, 22, 0.8)'
+              ],
+              borderColor: '#38bdf8',
+              borderWidth: 1.5
+            }]
+          },
+          options: {
+            title: { display: true, text: title, fontColor: '#ffffff', fontSize: 16 },
+            legend: { labels: { fontColor: '#94a3b8' } }
+          }
+        };
+
+        const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=800&h=450&bkg=%230b1120`;
+        if (sendTelegramPhoto && chatId) {
+          await sendTelegramPhoto(chatId, chartUrl, `📊 **${title}**`);
+        }
+        return { success: true, chart_url: chartUrl, title, delivered_to_telegram: !!chatId };
       }
 
       case 'run_sandbox_code': {
