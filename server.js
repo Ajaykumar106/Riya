@@ -604,6 +604,36 @@ app.get('/api/test-gemini', async (req, res) => {
   }
 });
 
+app.get('/api/test-openrouter', async (req, res) => {
+  const cleanKey = (OPENROUTER_KEY || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleanKey) return res.json({ error: 'OPENROUTER_API_KEY is missing in Render Environment Variables' });
+
+  const testModel = req.query.model || process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+  try {
+    const testRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${cleanKey}`,
+        'HTTP-Referer': 'https://riya.ai',
+        'X-Title': 'Riya Autonomous AI'
+      },
+      body: JSON.stringify({
+        model: testModel,
+        messages: [{ role: 'user', content: 'Say hello in 5 words.' }]
+      })
+    });
+    const testData = await testRes.json();
+    res.json({
+      status: testRes.status,
+      testedModel: testModel,
+      response: testData
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
+
 app.get('/api/test-embedding', requireAdminAuth, async (req, res) => {
   const cleanKey = (GEMINI_KEY || '').trim().replace(/^["']|["']$/g, '');
   try {
@@ -1134,7 +1164,11 @@ async function callGemini(sysPrompt, messagesList) {
         process.env.OPENROUTER_MODEL,
         'meta-llama/llama-3.3-70b-instruct:free',
         'deepseek/deepseek-r1:free',
-        'qwen/qwen-2.5-72b-instruct:free'
+        'deepseek/deepseek-chat:free',
+        'qwen/qwen-2.5-72b-instruct:free',
+        'google/gemini-2.0-flash-exp:free',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'mistralai/mistral-7b-instruct:free'
       ].filter(Boolean);
 
       for (const oModel of openRouterModels) {
@@ -1275,10 +1309,13 @@ async function callGemini(sysPrompt, messagesList) {
   if (cleanOpenRouterKey) {
     const openRouterModels = [
       process.env.OPENROUTER_MODEL,
-      'deepseek/deepseek-r1:free',
       'meta-llama/llama-3.3-70b-instruct:free',
+      'deepseek/deepseek-r1:free',
+      'deepseek/deepseek-chat:free',
       'qwen/qwen-2.5-72b-instruct:free',
-      'google/gemini-2.0-flash-exp:free'
+      'google/gemini-2.0-flash-exp:free',
+      'meta-llama/llama-3.1-8b-instruct:free',
+      'mistralai/mistral-7b-instruct:free'
     ].filter(Boolean);
 
     for (const oModel of openRouterModels) {
