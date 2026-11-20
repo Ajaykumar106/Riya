@@ -258,13 +258,42 @@ const FUNCTION_DECLARATIONS = [
   },
   {
     name: 'gods_eye_live_intel',
-    description: 'Query live spatial intelligence from the local God\'s Eye View engine: flights (ADS-B), satellites, maritime vessels (AIS), or hazard feeds.',
+    description: 'Query live spatial intelligence from the local 3D spatial engine: flights (ADS-B), satellites, maritime vessels (AIS), or hazard feeds.',
     parameters: {
       type: 'OBJECT',
       properties: {
         layer: { type: 'STRING', description: 'Layer: flights, satellites, cctv, hazards, or weather' },
         location: { type: 'STRING', description: 'City or geographic region (e.g. India, Delhi, Tokyo)' }
       }
+    }
+  },
+  {
+    name: 'notebook_synthesizer',
+    description: 'NotebookLM-style grounded document synthesis. Ingests user-provided text, URLs, or documents, performs citation mapping ([Source X]), produces an executive brief, two-host audio dialogue script, and visual radar metrics.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: { type: 'STRING', description: 'Title or subject of the research notebook' },
+        sources: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'Array of source URLs or raw text snippets to synthesize'
+        },
+        format: { type: 'STRING', description: 'Format: executive_notebook, audio_overview_script, or study_guide' }
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'osint_profiler',
+    description: '100% legal public intelligence and tech-stack profiler for developers (GitHub username) or companies (domain). Gathers public repository activity, tech stack, DNS/MX infrastructure, and architectural metrics.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        target: { type: 'STRING', description: 'GitHub username (e.g. Ajaykumar106) or company domain (e.g. zerodha.com)' },
+        target_type: { type: 'STRING', description: 'Type: developer, company, or auto' }
+      },
+      required: ['target']
     }
   }
 ];
@@ -961,6 +990,26 @@ async function executeTool(toolName, toolArgs, context = {}) {
             details: `Active spatial feed for ${layer} across ${location}.`
           }
         };
+      }
+
+      case 'notebook_synthesizer': {
+        const { synthesizeNotebook } = require('./intel');
+        const title = toolArgs.title || 'Research Notebook';
+        const sources = Array.isArray(toolArgs.sources) ? toolArgs.sources : [toolArgs.sources].filter(Boolean);
+        const format = toolArgs.format || 'executive_notebook';
+        return await synthesizeNotebook({
+          title,
+          sources,
+          format,
+          callModelFn: context.callGemini || context.callModel
+        });
+      }
+
+      case 'osint_profiler': {
+        const { profileTarget } = require('./intel');
+        const target = (toolArgs.target || '').trim();
+        const targetType = toolArgs.target_type || 'auto';
+        return await profileTarget(target, targetType);
       }
 
       default:

@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test_security.js && node test_multimodel.js",
+    "test": "node test_security.js && node test_multimodel.js && node test_intel.js",
     "test:security": "node test_security.js",
     "test:models": "node test_multimodel.js"
   },
